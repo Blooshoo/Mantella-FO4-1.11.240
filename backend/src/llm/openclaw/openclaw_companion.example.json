@@ -17,6 +17,7 @@
   "max_retries": 2,
   "retry_backoff_s": 0.5,
   "max_retry_after_s": 5.0,
+  "busy_status_is_pre_acceptance": false,
   "recap_messages": 12,
   "max_message_chars": 1200,
   "max_context_chars": 6000,

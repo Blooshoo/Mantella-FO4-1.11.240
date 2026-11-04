@@ -55,6 +55,10 @@ class OpenClawCompanionConfig:
     max_retries: int = 2
     retry_backoff_s: float = 0.5
     max_retry_after_s: float = 5.0
+    # Owner attestation (B05): set true ONLY after verifying that the Gateway never persists a turn
+    # before answering 429/503. Default false: busy retries go to a fresh session epoch
+    # (conversation scope) or are not retried at all (character scope, whose key cannot rotate).
+    busy_status_is_pre_acceptance: bool = False
     recap_messages: int = 12
     max_message_chars: int = 1200
     max_context_chars: int = 6000
@@ -126,6 +130,8 @@ class OpenClawCompanionConfig:
                         "refusing to route NPC dialogue to the main/default agent; "
                         "create a dedicated tool-restricted companion agent")
                 _check_url(self.base_url, self.allow_non_loopback)
+        if not isinstance(self.busy_status_is_pre_acceptance, bool):
+            raise OpenClawConfigError("busy_status_is_pre_acceptance must be true or false")
         for name in ("max_retries", "recap_messages", "max_message_chars", "max_context_chars",
                      "max_reply_chars", "max_tokens"):
             if int(getattr(self, name)) < 0:

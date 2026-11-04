@@ -458,3 +458,141 @@ class UnconfirmedTurnEpochTests(unittest.TestCase):
         key = client.state.session_key
         run(collect(client.streaming_call(THREAD, False)))
         self.assertEqual(client.state.session_key, key)
+
+
+# =========================================================================== B05 acceptance contract
+PLAYER_LINE = "Hey Kalli, ready to go?"
+
+
+class _ContractGateway:
+    """Stateful fake Gateway with a configurable (unverified) busy contract.
+
+    ``persist_then_busy``: the turn is appended to the session transcript and THEN answered with
+    the busy status - the adversarial reading the real Gateway has not been shown to exclude.
+    ``reject_before_persist``: busy answers never touch the transcript. ``busy`` = how many
+    requests (globally, in order) get the busy answer before the Gateway recovers."""
+
+    def __init__(self, contract, busy, status=503):
+        assert contract in ("persist_then_busy", "reject_before_persist")
+        self.contract, self.busy, self.status = contract, busy, status
+        self.transcripts: dict[str, list[str]] = {}
+        self.order: list[str] = []
+
+    def handler(self, request):
+        key = request.headers["x-openclaw-session-key"]
+        content = json.loads(request.content)["messages"][0]["content"]
+        self.order.append(key)
+        busy = len(self.order) <= self.busy
+        if not busy or self.contract == "persist_then_busy":
+            self.transcripts.setdefault(key, []).append(content)
+        if busy:
+            return httpx.Response(self.status, headers={"retry-after": "0"})
+        return httpx.Response(200, content=_sse(_chunk("ok"), "[DONE]"))
+
+    def copies(self, key, text=PLAYER_LINE):
+        return sum(text in turn for turn in self.transcripts.get(key, []))
+
+    def max_copies(self, text=PLAYER_LINE):
+        return max((self.copies(k, text) for k in self.transcripts), default=0)
+
+
+class BusyAcceptanceContractTests(unittest.TestCase):
+    """Sol review B05: no transcript may ever hold the player's turn twice, whichever busy
+    contract the Gateway really has (it is not verified)."""
+
+    def _client(self, gw, **kw):
+        c, tr = _gateway(gw.handler, **kw)
+        return OpenClawCompanionClient(c, tr, FakeFallback(chunks=["direct."]), "Kalli", "4C50", "conv1",
+                                       sleep=no_sleep)
+
+    def test_conversation_scope_busy_retries_are_safe_under_either_contract(self):
+        for contract in ("persist_then_busy", "reject_before_persist"):
+            for status in (503, 429):
+                with self.subTest(contract=contract, status=status):
+                    gw = _ContractGateway(contract, busy=2, status=status)
+                    client = self._client(gw, max_retries=2)
+                    first_key = client.state.session_key
+                    self.assertEqual(run(collect(client.streaming_call(THREAD, False))), [("content", "ok")])
+                    self.assertEqual(client.last_route, "openclaw")
+                    # each attempt went to a session that could not already hold the turn
+                    self.assertEqual(len(gw.order), 3)
+                    self.assertEqual(len(set(gw.order)), 3)
+                    self.assertEqual(gw.order[0], first_key)
+                    self.assertEqual(gw.max_copies(), 1)
+                    final = gw.order[-1]
+                    self.assertEqual(client.state.session_key, final)
+                    self.assertEqual(gw.copies(final), 1)                       # recap carried the turn
+                    self.assertIn("fox-eared wanderer", gw.transcripts[final][0])  # with scene context
+                    # the conversation then continues in that session with a delta, not a recap
+                    thread2 = THREAD + [{"role": "assistant", "content": "ok"},
+                                        {"role": "user", "content": "Player: well?"}]
+                    run(collect(client.streaming_call(thread2, False)))
+                    self.assertEqual(gw.order[-1], final)
+                    self.assertNotIn(PLAYER_LINE, gw.transcripts[final][-1])
+                    self.assertIn("well?", gw.transcripts[final][-1])
+                    self.assertEqual(gw.max_copies(), 1)
+
+    def test_exhausted_busy_retries_never_reuse_a_possibly_written_session(self):
+        gw = _ContractGateway("persist_then_busy", busy=3)
+        client = self._client(gw, max_retries=2)
+        self.assertEqual(run(collect(client.streaming_call(THREAD, False))), [("content", "direct.")])
+        self.assertEqual(client.last_route, "fallback")
+        self.assertEqual(len(set(gw.order)), 3)
+        # the next turn starts yet another epoch with a recap
+        thread2 = THREAD + [{"role": "assistant", "content": "direct."}, {"role": "user", "content": "Player: well?"}]
+        run(collect(client.streaming_call(thread2, False)))
+        self.assertEqual(len(gw.order), 4)
+        self.assertNotIn(gw.order[-1], gw.order[:3])
+        self.assertEqual(gw.max_copies(), 1)
+
+    def test_character_scope_does_not_retry_into_its_durable_session(self):
+        for fallback in (True, False):
+            with self.subTest(fallback=fallback):
+                gw = _ContractGateway("persist_then_busy", busy=1)
+                client = self._client(gw, session_scope="character", max_retries=2, fallback_to_direct=fallback)
+                key = client.state.session_key
+                items = run(collect(client.streaming_call(THREAD, False)))
+                self.assertEqual(items, [("content", "direct.")] if fallback else [])
+                self.assertEqual(client.last_route, "fallback" if fallback else "failed")
+                self.assertEqual(gw.order, [key])                               # no retry
+                self.assertEqual(client.state.session_key, key)                 # durable key kept
+                self.assertEqual(gw.copies(key), 1)
+                self.assertTrue(client.state.needs_resync)
+
+    def test_owner_attested_contract_restores_same_session_retry(self):
+        # Verified "busy is pre-acceptance": retry the identical request in the same session.
+        for scope in ("conversation", "character"):
+            with self.subTest(scope=scope):
+                gw = _ContractGateway("reject_before_persist", busy=2)
+                client = self._client(gw, session_scope=scope, max_retries=2, busy_status_is_pre_acceptance=True)
+                key = client.state.session_key
+                self.assertEqual(run(collect(client.streaming_call(THREAD, False))), [("content", "ok")])
+                self.assertEqual(gw.order, [key] * 3)
+                self.assertEqual(client.state.session_key, key)
+                self.assertEqual(gw.copies(key), 1)
+
+    def test_false_attestation_is_exactly_the_duplicate_hazard(self):
+        # Pins what the opt-in trades away: if the attestation is wrong, the turn is duplicated.
+        gw = _ContractGateway("persist_then_busy", busy=2)
+        client = self._client(gw, max_retries=2, busy_status_is_pre_acceptance=True)
+        run(collect(client.streaming_call(THREAD, False)))
+        self.assertEqual(gw.copies(client.state.session_key), 3)
+
+    def test_connect_failure_still_retries_in_place(self):
+        hits = []
+
+        def handler(request):
+            hits.append(request.headers["x-openclaw-session-key"])
+            if len(hits) == 1:
+                raise httpx.ConnectError("refused")
+            return httpx.Response(200, content=_sse(_chunk("ok"), "[DONE]"))
+        c, tr = _gateway(handler, max_retries=2)
+        client = OpenClawCompanionClient(c, tr, FakeFallback(), "Kalli", "4C50", "conv1", sleep=no_sleep)
+        run(collect(client.streaming_call(THREAD, False)))
+        self.assertEqual(len(set(hits)), 1)                                    # never reached: no rotation
+
+    def test_attestation_must_be_a_real_boolean(self):
+        from src.llm.openclaw.config import OpenClawCompanionConfig, OpenClawConfigError
+        with self.assertRaises(OpenClawConfigError):
+            OpenClawCompanionConfig.from_dict({"busy_status_is_pre_acceptance": "true"})
+        self.assertFalse(OpenClawCompanionConfig().busy_status_is_pre_acceptance)

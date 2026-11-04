@@ -123,16 +123,24 @@ class OpenClawCompanionClient:
 
         openai_messages = _to_openai_messages(messages)
         scene, lines = trust.openai_messages_to_lines(openai_messages, self._character, self._cfg.max_message_chars)
-        plan = self.state.plan(scene, lines, self._cfg.recap_messages, self._character)
-        content = trust.build_turn(self._character, scene if plan.include_context else None,
-                                   plan.lines, self._cfg.max_context_chars)
-        request = TurnRequest(self.state.session_key, self._cfg.model, content, self._cfg.max_tokens,
-                              self._cfg.message_channel)
 
+        def build() -> tuple[Any, TurnRequest]:
+            p = self.state.plan(scene, lines, self._cfg.recap_messages, self._character)
+            content = trust.build_turn(self._character, scene if p.include_context else None,
+                                       p.lines, self._cfg.max_context_chars)
+            return p, TurnRequest(self.state.session_key, self._cfg.model, content, self._cfg.max_tokens,
+                                  self._cfg.message_channel)
+
+        plan, request = build()
         attempt = 0
         produced = 0
         completed = False
         while True:
+            if request.session_key != self.state.session_key:
+                # The previous attempt may have been persisted in its session (B05: a busy answer is
+                # not proven pre-acceptance), which was therefore rotated away: this attempt goes to
+                # the fresh epoch with a bounded recap and can never land in a transcript twice.
+                plan, request = build()
             stream = self._transport.stream(request)
             # Until proven otherwise the Gateway may have accepted this turn (re-review N06).
             maybe_accepted = True
@@ -160,14 +168,25 @@ class OpenClawCompanionClient:
                 break
             except OpenClawTransportError as e:
                 self.last_error = self._redact(str(e))
-                if not e.ambiguous and not produced and not e.after_first_token:
-                    maybe_accepted = False  # pre-submission failure or explicit rejection
+                if not e.ambiguous and not produced and not e.after_first_token and (
+                        not e.acceptance_unverified or self._cfg.busy_status_is_pre_acceptance):
+                    # Pre-submission failure or explicit rejection. A busy 429/503 only counts as
+                    # one when the owner verified that contract (busy_status_is_pre_acceptance).
+                    maybe_accepted = False
                 if produced or e.after_first_token:
                     # Speech already reached TTS: never retry or fall back (would duplicate lines).
                     logger.error("OpenClaw stream for %s broke mid-reply: %s", self._character, self.last_error)
                     self.last_route = "openclaw-partial"
                     break
-                if e.retryable and attempt < self._cfg.max_retries:
+                retry = e.retryable and attempt < self._cfg.max_retries
+                if retry and maybe_accepted and self._cfg.session_scope != "conversation":
+                    # A durable character session cannot move to a fresh epoch, so retrying could
+                    # duplicate a turn the Gateway persisted before answering busy (B05).
+                    logger.warning("OpenClaw busy for %s (%s); not retrying into the durable character "
+                                   "session (busy_status_is_pre_acceptance is not set)",
+                                   self._character, self.last_error)
+                    retry = False
+                if retry:
                     attempt += 1
                     delay = self._cfg.retry_backoff_s * (2 ** (attempt - 1))
                     if e.retry_after is not None:
@@ -194,9 +213,10 @@ class OpenClawCompanionClient:
                 if not completed:
                     self.state.invalidate()
                     # Any termination that may follow acceptance - partial EOF, reply-cap truncation,
-                    # consumer stop/cancel, ambiguous errors - moves to a fresh session epoch, so the
-                    # next recap never lands in a transcript that may already hold this turn.
-                    if maybe_accepted and not self._rotated_this_turn:
+                    # consumer stop/cancel, ambiguous errors, unverified busy answers - moves to a
+                    # fresh session epoch, so neither a retry nor the next turn's recap lands in a
+                    # transcript that may already hold this turn. Once per session the attempt used.
+                    if maybe_accepted and self.state.session_key == request.session_key:
                         self._after_unconfirmed()
         if completed:
             self.state.commit(plan, scene)

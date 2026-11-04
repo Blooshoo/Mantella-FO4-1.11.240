@@ -11,13 +11,19 @@
 The adapter never sends ``tools``/``tool_choice`` and never sends ``x-openclaw-model``
 (that is an owner-level override).
 
-Retry safety: a failure is retryable only when the turn demonstrably never reached the
-Gateway (connection refused / connect or pool timeout) or the Gateway explicitly rejected
-it (429/503). Anything after the request may have been accepted (read errors, protocol
+Retry safety: a failure is retryable when the turn demonstrably never reached the
+Gateway (connection refused / connect or pool timeout) or the Gateway answered "busy"
+(429/503). Anything after the request may have been accepted (read errors, protocol
 errors, missing content, first-token timeout, a streamed error frame) is *ambiguous*:
 the Gateway may already have appended the player's turn to the stateful session, so
 replaying it would duplicate the turn. Those errors carry ``ambiguous=True`` and are
 never retried; the client then moves to a fresh session epoch (see client.py).
+
+Busy statuses (Sol review B05): whether the Gateway can persist a turn and *then* answer
+429/503 is not part of any verified contract. They therefore carry
+``acceptance_unverified=True``: retryable, but the client only retries them into a session
+that cannot already hold the turn (a fresh epoch), unless the owner has verified the
+contract and set ``busy_status_is_pre_acceptance``.
 
 Log safety: streamed error frames are peer-controlled text that can echo prompt data or
 credentials, so only a validated stable error code/type is ever kept, never the message.
@@ -45,7 +51,7 @@ class TurnRequest:
 class OpenClawTransportError(Exception):
     def __init__(self, message: str, *, retryable: bool = False, status: int | None = None,
                  retry_after: float | None = None, after_first_token: bool = False,
-                 ambiguous: bool = False):
+                 ambiguous: bool = False, acceptance_unverified: bool = False):
         super().__init__(message)
         self.retryable = retryable and not ambiguous
         self.status = status
@@ -53,6 +59,8 @@ class OpenClawTransportError(Exception):
         self.after_first_token = after_first_token
         # True when the Gateway may already have accepted/persisted the turn.
         self.ambiguous = ambiguous
+        # True for an explicit "busy" answer whose pre-acceptance is assumed, not verified (B05).
+        self.acceptance_unverified = acceptance_unverified
 
 
 class Transport(Protocol):
@@ -168,7 +176,8 @@ class MockTransport:
         self.auth_present.append(bool(token))
         if self.fail_first > 0:
             self.fail_first -= 1
-            raise OpenClawTransportError("mock unavailable", retryable=True, status=self.fail_status)
+            raise OpenClawTransportError("mock unavailable", retryable=True, status=self.fail_status,
+                                         acceptance_unverified=self.fail_status in (429, 503))
         sent = 0
         try:
             for chunk in self.reply_chunks:
@@ -307,8 +316,9 @@ def _status_error(status: int, retry_after: str | None) -> OpenClawTransportErro
     if status == 400:
         return OpenClawTransportError("gateway rejected the request (HTTP 400)", status=status)
     if status in (429, 503):
-        # Explicit "not accepted, try later" from the Gateway itself.
+        # "Busy, try later" from the Gateway. That the turn was NOT persisted first is assumed,
+        # not verified (B05), so the client never retries it into the same session by default.
         return OpenClawTransportError(f"gateway busy (HTTP {status})", retryable=True, status=status,
-                                      retry_after=ra)
+                                      retry_after=ra, acceptance_unverified=True)
     # 500/502/504 etc.: the run may have started before the failure -> ambiguous, not retried.
     return OpenClawTransportError(f"gateway error (HTTP {status})", status=status, ambiguous=status >= 500)
