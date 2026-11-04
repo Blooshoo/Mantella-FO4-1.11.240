@@ -1,0 +1,374 @@
+
+from regex import Regex
+from src.config.types.config_value import ConfigValue
+from src.config.types.config_value_int import ConfigValueInt
+from src.config.types.config_value_string import ConfigValueString
+from src.config.types.config_value_bool import ConfigValueBool
+from src.config.config_value_constraint import ConfigValueConstraint, ConfigValueConstraintResult
+
+
+class PromptDefinitions:
+    ALLOWED_PROMPT_VARIABLES = ["player_name",
+                                "player_description",
+                                "player_equipment",
+                                "player_gender",
+                                "player_race",
+                                "game",
+                                "name",
+                                "names",
+                                "names_w_player",
+                                "bio",
+                                "bios", 
+                                "trust",
+                                "gender",
+                                "race",
+                                "genders",
+                                "races",
+                                "genders_and_races",
+                                "equipment",
+                                "location",
+                                "weather",
+                                "time",
+                                "current_day",
+                                "time_group", 
+                                "language", 
+                                "conversation_summary",
+                                "conversation_summaries",
+                                "actions"]
+    
+    ALLOWED_PROMPT_VARIABLES_RADIANT = [
+                                "game",
+                                "name",
+                                "names",
+                                "bio",
+                                "bios",
+                                "gender",
+                                "race",
+                                "genders",
+                                "races",
+                                "genders_and_races",
+                                "equipment",
+                                "location",
+                                "weather",
+                                "time",
+                                "current_day",
+                                "time_group",
+                                "language",
+                                "conversation_summary",
+                                "conversation_summaries",
+                                "actions"]
+    
+    ALLOWED_PROMPT_VARIABLES_FUNCTION_LLM = [
+                                "game"]
+    
+    BASE_PROMPT_DESCRIPTION = """The starting prompt sent to the LLM when an NPC is selected.
+                                The following are dynamic variables that need to be contained in curly brackets {}:
+                                name = the NPC's name
+                                names = the names of all NPCs in the conversation
+                                names_w_player = the names of all NPCs in the conversation and the name of the player character
+                                game = the selected game
+                                bio = the NPC's background description
+                                trust = how well the NPC knows the player (eg "a stranger", "a friend")
+                                gender = the NPC's gender
+                                race = the NPC's race
+                                genders = the genders of all NPCs in natural language (eg "Lydia is a female. Arngeir is a male.")
+                                races = the races of all NPCs in natural language (eg "Lydia is a Nord. Arngeir is a Greybeard.")
+                                genders_and_races = combined gender and race of all NPCs in natural language (eg "Lydia is a female Nord. Arngeir is a male Greybeard.")
+                                location = the current location
+                                weather = the current weather
+                                time = the time of day as a number (eg 1, 22)
+                                time_group = the time of day in words (eg "in the morning", "at night")
+                                language = the selected language
+                                conversation_summary = reads the latest conversation summaries for the NPC stored in data/conversations/NPC_Name/NPC_Name_summary_X.txt
+                                player_name = the name of the player character
+                                player_description = a description of the player character (needs to be added in game or using the config value)
+                                player_equipment = a basic description of the equipment the player character carries
+                                player_gender = the player character's gender
+                                player_race = the player character's race
+                                equipment = a basic description of the equipment the NPCs carry
+                                actions = instructions for the LLM how to trigger actions (if advanced actions are disabled, otherwise action instructions are already passed to the LLM as tools via the 'description' field)"""
+    
+    BASE_RADIANT_DESCRIPTION = """The starting prompt sent to the LLM when a radiant conversation is started.
+                                The following are dynamic variables that need to be contained in curly brackets {}:
+                                name = the NPC's name
+                                names = the names of all NPCs in the conversation
+                                game = the selected game
+                                bio = the backgrounds of the NPCs
+                                gender = the NPC's gender
+                                race = the NPC's race
+                                genders = the genders of all NPCs in natural language (eg "Lydia is a female. Arngeir is a male.")
+                                races = the races of all NPCs in natural language (eg "Lydia is a Nord. Arngeir is a Greybeard.")
+                                genders_and_races = combined gender and race of all NPCs in natural language (eg "Lydia is a female Nord. Arngeir is a male Greybeard.")
+                                location = the current location
+                                weather = the current weather
+                                time = the time of day as a number (eg 1, 22)
+                                time_group = the time of day in words (eg "in the morning", "at night")
+                                language = the selected language
+                                conversation_summary = reads the latest conversation summaries for the NPCs stored in data/conversations/NPC_Name/NPC_Name_summary_X.txt
+                                equipment = a basic description of the equipment the NPCs carry
+                                actions = instructions for the LLM to trigger actions (if advanced actions are disabled, otherwise action instructions are already passed to the LLM as tools via the 'description' field)"""
+
+        
+    class PromptChecker(ConfigValueConstraint[str]):
+        def __init__(self, allowed_prompt_variables: list[str]) -> None:
+            super().__init__()
+            self.__allowed_prompt_variables = allowed_prompt_variables
+
+        def apply_constraint(self, prompt: str) -> ConfigValueConstraintResult:
+            check_regex = Regex("{(?P<variable>.*?)}")
+            matches = check_regex.findall(prompt)
+            allowed = self.__allowed_prompt_variables
+            for m in matches:
+                if not m in allowed:
+                    if len(allowed) == 0:
+                        return ConfigValueConstraintResult("Found variable '{" + m + "}' in text. No variables allowed.")
+                    return ConfigValueConstraintResult("Found variable '{" + m + "}'" + f" in prompt which is not part of the allowed variables {', '.join(allowed[:-1]) + ' or ' + allowed[-1]}")
+            return ConfigValueConstraintResult()
+    
+    @staticmethod
+    def get_skyrim_prompt_config_value() -> ConfigValue:
+        skyrim_prompt_value = """# Overview
+You are {name}, a {gender} {race}, in Skyrim. You are talking with {player_name} (the player), a {player_gender} {player_race}. The player {player_equipment} {equipment}
+
+# Background
+{bio}
+
+# History
+{conversation_summary}
+
+# Current Scene
+You are now in {location}. The time is {time} {time_group} on Day {current_day}. {weather}
+
+# Rules
+{actions}
+Use tools to perform actions where appropriate.
+Output ONLY spoken dialogue. No narration, no descriptions, no thoughts.
+Do not use quotation marks.
+Stay in character.
+
+Respond as {name} now in {language}."""
+        return ConfigValueString("skyrim_prompt","Skyrim Prompt",PromptDefinitions.BASE_PROMPT_DESCRIPTION,skyrim_prompt_value,[PromptDefinitions.PromptChecker(PromptDefinitions.ALLOWED_PROMPT_VARIABLES)])
+
+    @staticmethod
+    def get_skyrim_multi_npc_prompt_config_value() -> ConfigValue:
+        skyrim_multi_npc_prompt = """# Overview
+The following is a conversation in Skyrim between {names_w_player}. {genders_and_races} {player_name} (the player) is a {player_gender} {player_race}. The player {player_equipment} {equipment}
+
+# Background
+{bios}
+
+# History
+{conversation_summaries}
+
+# Current Scene
+The location is now {location}. The time is {time} {time_group} on Day {current_day}. {weather}
+
+# Rules
+{actions}
+Use tools to perform actions where appropriate.
+You are tasked with providing the responses for the NPCs. Begin your response with an indication of who you are speaking as, for example: '{name}: Good evening.'.
+Use your own discretion to decide who should speak in a given situation (sometimes responding with all NPCs is suitable).
+Output ONLY spoken dialogue. No narration, no descriptions, no thoughts.
+Do not use quotation marks.
+Stay in character.
+
+Remember, you can only respond as {names}. Ensure to use their full name when responding. Respond now in {language}."""
+        return ConfigValueString("skyrim_multi_npc_prompt","Skyrim Multi-NPC Prompt",PromptDefinitions.BASE_PROMPT_DESCRIPTION,skyrim_multi_npc_prompt,[PromptDefinitions.PromptChecker(PromptDefinitions.ALLOWED_PROMPT_VARIABLES)])
+
+    @staticmethod
+    def get_skyrim_radiant_prompt_config_value() -> ConfigValue:
+        skyrim_radiant_prompt = """# Overview
+The following is a conversation in Skyrim between {names}. {genders_and_races} {equipment}
+
+# Background
+{bios}
+
+# History
+{conversation_summaries}
+
+# Current Scene
+The location is now {location}. The time is {time} {time_group} on Day {current_day}. {weather}
+
+# Rules
+{actions}
+Use tools to perform actions where appropriate.
+You are tasked with providing the responses for the NPCs. Begin your response with an indication of who you are speaking as, for example: '{name}: Good evening.'.
+Multiple NPCs should speak each turn.
+Output ONLY spoken dialogue. No narration, no descriptions, no thoughts.
+Do not use quotation marks.
+Stay in character.
+
+Remember, you can only respond as {names}. Ensure to use their full name when responding. Respond now in {language}."""
+        return ConfigValueString("skyrim_radiant_prompt","Skyrim Radiant Conversation Prompt",PromptDefinitions.BASE_RADIANT_DESCRIPTION,skyrim_radiant_prompt,[PromptDefinitions.PromptChecker(PromptDefinitions.ALLOWED_PROMPT_VARIABLES_RADIANT)])
+
+    @staticmethod
+    def get_fallout4_prompt_config_value() -> ConfigValue:
+        fallout4_prompt = """# Overview
+You are {name}, a {gender} {race}, in the post-apocalyptic Commonwealth of Fallout. You are talking with the player, a {player_gender} {player_race}.
+
+# Background
+{bio}
+
+# History
+{conversation_summary}
+
+# Current Scene
+You are now in {location}. The time is {time} {time_group}.
+
+# Rules
+{actions}
+Use tools to perform actions where appropriate.
+Output ONLY spoken dialogue. No narration, no descriptions, no thoughts.
+Do not use quotation marks.
+Stay in character.
+
+Respond as {name} now in {language}."""
+        return ConfigValueString("fallout4_prompt","Fallout 4 Prompt",PromptDefinitions.BASE_PROMPT_DESCRIPTION,fallout4_prompt,[PromptDefinitions.PromptChecker(PromptDefinitions.ALLOWED_PROMPT_VARIABLES)])
+
+    @staticmethod
+    def get_fallout4_multi_npc_prompt_config_value() -> ConfigValue:
+        fallout4_multi_npc_prompt = """# Overview
+The following is a conversation in the post-apocalyptic Commonwealth of Fallout between {names_w_player}. {genders_and_races} {player_name} (the player) is a {player_gender} {player_race}.
+
+# Background
+{bios}
+
+# History
+{conversation_summaries}
+
+# Current Scene
+The location is now {location}. The time is {time} {time_group}.
+
+# Rules
+{actions}
+Use tools to perform actions where appropriate.
+You are tasked with providing the responses for the NPCs. Begin your response with an indication of who you are speaking as, for example: '{name}: Good evening.'.
+Use your own discretion to decide who should speak in a given situation (sometimes responding with all NPCs is suitable).
+Output ONLY spoken dialogue. No narration, no descriptions, no thoughts.
+Do not use quotation marks.
+Stay in character.
+
+Remember, you can only respond as {names}. Ensure to use their full name when responding. Respond now in {language}."""
+        return ConfigValueString("fallout4_multi_npc_prompt","Fallout 4 Multi-NPC Prompt",PromptDefinitions.BASE_PROMPT_DESCRIPTION,fallout4_multi_npc_prompt,[PromptDefinitions.PromptChecker(PromptDefinitions.ALLOWED_PROMPT_VARIABLES)])
+
+    @staticmethod
+    def get_fallout4_radiant_prompt_config_value() -> ConfigValue:
+        fallout4_radiant_prompt = """# Overview
+The following is a conversation in the post-apocalyptic Commonwealth of Fallout between {names}. {genders_and_races}
+
+# Background
+{bios}
+
+# History
+{conversation_summaries}
+
+# Current Scene
+The location is now {location}. The time is {time} {time_group}.
+
+# Rules
+{actions}
+Use tools to perform actions where appropriate.
+You are tasked with providing the responses for the NPCs. Begin your response with an indication of who you are speaking as, for example: '{name}: Good evening.'.
+Multiple NPCs should speak each turn.
+Output ONLY spoken dialogue. No narration, no descriptions, no thoughts.
+Do not use quotation marks.
+Stay in character.
+
+Remember, you can only respond as {names}. Ensure to use their full name when responding. Respond now in {language}."""
+        return ConfigValueString("fallout4_radiant_prompt","Fallout 4 Radiant Conversation Prompt",PromptDefinitions.BASE_RADIANT_DESCRIPTION,fallout4_radiant_prompt,[PromptDefinitions.PromptChecker(PromptDefinitions.ALLOWED_PROMPT_VARIABLES_RADIANT)])
+    
+    @staticmethod
+    def get_memory_prompt_config_value() -> ConfigValue:
+        memory_prompt_description = """The prompt used to summarize a conversation and save to the NPC's memories in data/game/conversations/NPC_Name/NPC_Name_summary_X.txt.
+                                         	If you would like to edit this, please ensure that the below dynamic variables are contained in curly brackets {}:
+                                               name = the NPC name(s)
+                                               language = the selected language
+                                               game = the game selected
+                                               bios = the NPC bio(s)
+                                               genders = the genders of all NPCs in natural language (eg "Lydia is a female. Arngeir is a male.")
+                                               races = the races of all NPCs in natural language (eg "Lydia is a Nord. Arngeir is a Greybeard.")
+                                               genders_and_races = combined gender and race of all NPCs in natural language (eg "Lydia is a female Nord. Arngeir is a male Greybeard.")
+                                               conversation_summaries = summaries of previous conversations
+                                               player_name = the player's name"""
+        memory_prompt = """You are tasked with summarizing the conversation between {name} and {player_name} (and any other characters present). These conversations take place in {game}.
+
+Here is some information about the characters for context:
+{genders_and_races}
+
+{bios}
+
+Here are the previous conversation summaries for context:
+{conversation_summaries}
+
+It is not necessary to comment on any mixups in communication such as mishearings. Text contained within brackets state in-game events.
+Please summarize the conversation into a single paragraph in {language}."""
+        return ConfigValueString("memory_prompt","Memory Prompt",memory_prompt_description,memory_prompt,[PromptDefinitions.PromptChecker(["name", "language", "game", "bios", "conversation_summaries", "player_name", "genders", "races", "genders_and_races"])])
+    
+    @staticmethod
+    def get_memory_prompt_datetime_prefix_config_value() -> ConfigValue:
+        description = """Whether to prepend a timestamp of when the conversation took place (eg "[Day 42, 5 in the early evening]") to the summary."""
+        return ConfigValueBool("memory_prompt_datetime_prefix","Memory Prompt Datetime Prefix",description,True)
+    
+    @staticmethod
+    def get_resummarize_prompt_config_value() -> ConfigValue:
+        resummarize_prompt_description = """Memories build up over time in data/game/conversations/NPC_Name/NPC_Name_summary_X.txt.
+                                            When these memories become too long to fit into the chosen LLM's maximum context length, these memories need to be condensed down.
+                                            This prompt is used to ask the LLM to summarize an NPC's memories into a single paragraph, and starts a new memory file in data/game/conversations/NPC_Name/NPC_Name_summary_X+1.txt.
+                                            If you would like to edit this, please ensure that the below dynamic variables are contained in curly brackets {}:
+                                                name = the NPC's name
+                                                language = the selected language
+                                                game = the game selected
+                                                gender = the NPC's gender
+                                                race = the NPC's race
+                                                player_name = the player's name"""
+        resummarize_prompt = """You are tasked with summarizing the conversation history between {name} and {player_name} (the player) / other characters. These conversations take place in {game}.
+Each paragraph represents a conversation at a new point in time. Timestamps in square brackets (eg [Day 42, 5 in the early evening]) indicate when each conversation occurred. Please summarize these conversations into a single paragraph in {language}."""
+        return ConfigValueString("resummarize_prompt","Resummarize Prompt",resummarize_prompt_description,resummarize_prompt,[PromptDefinitions.PromptChecker(["name", "language", "game", "player_name", "gender", "race"])])
+    
+    @staticmethod
+    def get_vision_prompt_config_value() -> ConfigValue:
+        vision_prompt_description = """The prompt passed to the vision-capable LLM when `Custom Vision Model` is enabled."""
+        vision_prompt = """This image is to give context and is from the player's point of view in the game of {game}. 
+Describe the details visible inside it without mentioning the game. Refer to it as a scene instead of an image."""
+        return ConfigValueString("vision_prompt","Vision Prompt",vision_prompt_description,vision_prompt)
+    
+    @staticmethod
+    def get_radiant_start_prompt_config_value() -> ConfigValue:
+        radiant_start_prompt_description = """Once a radiant conversation has started and the radiant prompt has been passed to the LLM, the below text is passed in replace of the player response.
+                                        This prompt is used to steer the radiant conversation.""" 
+        radiant_start_prompt = """Please begin / continue a conversation topic (greetings are not needed). Ensure to change the topic if the current one is losing steam. 
+The conversation should steer towards topics which reveal information about the characters and who they are, or instead drive forward previous conversations in their memory."""
+        return ConfigValueString("radiant_start_prompt","Radiant Start Prompt",radiant_start_prompt_description,radiant_start_prompt,[PromptDefinitions.PromptChecker([])])
+
+    @staticmethod
+    def get_radiant_continue_prompt_config_value() -> ConfigValue:
+        radiant_continue_prompt_description = """The prompt sent to the LLM between turns in a radiant conversation to keep the conversation going.
+                                            This is used for intermediate turns when Radiant Max Turns is greater than 2."""
+        radiant_continue_prompt = """Continue the conversation, or call the EndConversation action if the conversation has naturally concluded."""
+        return ConfigValueString("radiant_continue_prompt","Radiant Continue Prompt",radiant_continue_prompt_description,radiant_continue_prompt,[PromptDefinitions.PromptChecker([])])
+
+    @staticmethod
+    def get_radiant_end_prompt_config_value() -> ConfigValue:
+        radiant_end_prompt_description = """The final prompt sent to the LLM before ending a radiant conversation.
+                                            This prompt is used to guide the LLM to end the conversation naturally.""" 
+        radiant_end_prompt = """Please wrap up the current topic between the NPCs in a natural way. Nobody is leaving, so there is no need for formal goodbyes."""
+        return ConfigValueString("radiant_end_prompt","Radiant End Prompt",radiant_end_prompt_description,radiant_end_prompt,[PromptDefinitions.PromptChecker([])])
+    
+    @staticmethod
+    def get_radiant_max_turns_config_value() -> ConfigValue:
+        radiant_max_turns_description = """The maximum number of LLM response turns in a radiant conversation.
+                                            Higher values allow for longer conversations. 
+                                            If the EndConversation action is enabled for radiant conversation,
+                                            the LLM may choose to end the conversation earlier if it naturally concludes."""
+        return ConfigValueInt("radiant_max_turns", "Radiant Max Turns", radiant_max_turns_description, 2, 2, 999)
+    
+    @staticmethod
+    def get_function_llm_prompt_config_value() -> ConfigValue:
+        description = """The prompt sent to the separate function calling LLM when `Custom Function Model` is enabled.
+                            This LLM analyzes the recent conversation and determines which in-game actions (if any) should be triggered.
+                            The following are dynamic variables that need to be contained in curly brackets {}:
+                            game = the selected game"""
+        function_llm_prompt = """You are analyzing a conversation in {game} to determine if any in-game actions should be triggered. 
+Based on the recent dialogue, call the appropriate functions to execute actions. 
+If no actions are needed, do not call any functions."""
+        return ConfigValueString("function_llm_prompt","Tool Calling LLM Prompt",description,function_llm_prompt,[PromptDefinitions.PromptChecker(PromptDefinitions.ALLOWED_PROMPT_VARIABLES_FUNCTION_LLM)])

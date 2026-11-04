@@ -1,0 +1,282 @@
+﻿from typing import Any, Callable
+from src.games.equipment import Equipment
+from src import utils
+
+class Character:
+    """Representation of a character in the game
+    """
+    def __init__(
+            self, 
+            base_id: str, 
+            ref_id: str,  
+            name: str, 
+            gender_raw: int, 
+            race_raw: str, 
+            is_player_character: bool, 
+            bio: str, 
+            is_in_combat: bool, 
+            is_enemy: bool, 
+            relationship_rank: int, 
+            is_generic_npc: bool, 
+            ingame_voice_model:str, 
+            tts_voice_model: str, 
+            csv_in_game_voice_model: str, 
+            advanced_voice_model: str, 
+            voice_accent: str, 
+            equipment:Equipment, 
+            custom_character_values: dict[str, Any], 
+            llm_service: str = "", 
+            llm_model: str = "", 
+            tts_service: str = ""
+        ):
+        self.__base_id: str = base_id
+        self.__ref_id: str = ref_id
+        self.__name: str = name
+        self.__gender_raw: int = gender_raw
+        self.__race_raw: str = race_raw
+        self.__is_player_character: bool = is_player_character
+        self.__bio: str = bio
+        self.__is_in_combat: bool = is_in_combat
+        self.__is_enemy: bool = is_enemy
+        self.__relationship_rank: int = relationship_rank
+        self.__is_generic_npc: bool = is_generic_npc
+        self.__ingame_voice_model: str = ingame_voice_model
+        self.__tts_voice_model: str = tts_voice_model
+        self.__csv_in_game_voice_model = csv_in_game_voice_model # info['skyrim_voice_folder'] if 'skyrim' in game.lower() else info['fallout4_voice_folder']
+        self.__advanced_voice_model = advanced_voice_model
+        self.__voice_accent = voice_accent #info.get('voice_accent', None)
+        self.__equipment = equipment
+        self.__custom_character_values: dict[str, Any] = custom_character_values
+        self.__llm_service: str = llm_service
+        self.__llm_model: str = llm_model
+        self.__tts_service: str = tts_service
+
+    @property
+    def base_id(self) -> str:
+        return self.__base_id
+    
+    @base_id.setter
+    def base_id(self, value: str):
+        self.__base_id = value
+
+    @property
+    def ref_id(self) -> str:
+        return self.__ref_id
+    
+    @ref_id.setter
+    def ref_id(self, value: str):
+        self.__ref_id = value
+
+    @property
+    def name(self) -> str:
+        return self.__name
+    
+    @name.setter
+    def name(self, value: str):
+        self.__name = value
+
+    @property
+    def gender_raw(self) -> int:
+        """The gender as sent by the game (0 = male, 1 = female)"""
+        return self.__gender_raw
+
+    @gender_raw.setter
+    def gender_raw(self, value: int):
+        self.__gender_raw = value
+
+    @property
+    def gender(self) -> str:
+        """The gender as readable text"""
+        return ["male", "female"][self.__gender_raw]
+
+    @property
+    def personal_pronoun_subject(self) -> str:
+        return ["he", "she"][self.__gender_raw]
+
+    @property
+    def personal_pronoun_object(self) -> str:
+        return ["him", "her"][self.__gender_raw]
+
+    @property
+    def possesive_pronoun(self) -> str:
+        return ["his", "hers"][self.__gender_raw]
+
+    @property
+    def race_raw(self) -> str:
+        """The race as sent by the game (eg "[Race <NordRace (00013746)>]")"""
+        return self.__race_raw
+
+    @race_raw.setter
+    def race_raw(self, value: str):
+        self.__race_raw = value
+
+    @property
+    def race(self) -> str:
+        """The race as readable text (eg "Nord"), parsed from the raw game value"""
+        return utils.parse_race_name(self.__race_raw) or ""
+
+    @property
+    def is_player_character(self) -> bool:
+        return self.__is_player_character
+    
+    @is_player_character.setter
+    def is_player_character(self, value: bool):
+        self.__is_player_character = value
+
+    @property
+    def bio(self) -> str:
+        return self.__bio
+    
+    @bio.setter
+    def bio(self, value: str):
+        self.__bio = value
+
+    @property
+    def is_in_combat(self) -> bool:
+        return self.__is_in_combat
+    
+    @is_in_combat.setter
+    def is_in_combat(self, value: bool):
+        self.__is_in_combat = value
+    
+    @property
+    def is_enemy(self) -> bool:
+        return self.__is_enemy
+    
+    @is_enemy.setter
+    def is_enemy(self, value: bool):
+        self.__is_enemy = value
+
+    @property
+    def relationship_rank(self) -> int:
+        return self.__relationship_rank
+    
+    @relationship_rank.setter
+    def relationship_rank(self, value: int):
+        self.__relationship_rank = value
+
+    @property
+    def is_generic_npc(self) -> bool:
+        return self.__is_generic_npc
+    
+    @is_generic_npc.setter
+    def is_generic_npc(self, value: bool):
+        self.__is_generic_npc = value
+
+    @property
+    def in_game_voice_model(self) -> str:
+        return self.__ingame_voice_model
+    
+    @in_game_voice_model.setter
+    def in_game_voice_model(self, value: str):
+        self.__ingame_voice_model = value
+
+    @property
+    def tts_voice_model(self) -> str:
+        return self.__tts_voice_model
+    
+    @tts_voice_model.setter
+    def tts_voice_model(self, value: str):
+        self.__tts_voice_model = value
+
+    @property
+    def csv_in_game_voice_model(self) -> str:
+        return self.__csv_in_game_voice_model
+    
+    @csv_in_game_voice_model.setter
+    def csv_in_game_voice_model(self, value: str):
+        self.__csv_in_game_voice_model = value
+
+    @property
+    def advanced_voice_model(self) -> str:
+        return self.__advanced_voice_model
+    
+    @advanced_voice_model.setter
+    def advanced_voice_model(self, value: str):
+        self.__advanced_voice_model = value
+
+    @property
+    def voice_accent(self) -> str:
+        return self.__voice_accent
+    
+    @voice_accent.setter
+    def voice_accent(self, value: str):
+        self.__voice_accent = value
+
+    @property
+    def custom_character_values(self) -> dict[str, Any]:
+        return self.__custom_character_values
+    
+    @custom_character_values.setter
+    def custom_character_values(self, value: dict[str, Any]):
+        self.__custom_character_values = value
+    
+    @property
+    def equipment(self) -> Equipment:
+        return self.__equipment
+
+    @property
+    def llm_service(self) -> str:
+        return self.__llm_service
+
+    @llm_service.setter
+    def llm_service(self, value: str):
+        self.__llm_service = value
+
+    @property
+    def llm_model(self) -> str:
+        return self.__llm_model
+
+    @llm_model.setter
+    def llm_model(self, value: str):
+        self.__llm_model = value
+
+    @property
+    def tts_service(self) -> str:
+        return self.__tts_service
+
+    @tts_service.setter
+    def tts_service(self, value: str):
+        self.__tts_service = value
+
+    def get_custom_character_value(self, key: str) -> Any:
+        if self.__custom_character_values.__contains__(key):
+            return self.__custom_character_values[key]
+        return None
+    
+    def set_custom_character_value(self, key: str, value: Any):
+        self.__custom_character_values[key] = value
+
+    def __eq__(self, other):
+        if isinstance(self, type(other)):
+            return self.name == other.name and self.base_id == other.base_id and self.ref_id == other.ref_id and self.race_raw == other.race_raw
+        return NotImplemented
+    
+    def __hash__(self):
+        return hash(tuple(sorted(self.__dict__.items())))
+
+
+def _describe_characters(characters: list[Character], describe: Callable[[Character], str]) -> str:
+    """Formats a per-character description as natural language, with one sentence per character
+    (eg "Lydia is a female. Arngeir is a male.")
+    """
+    def sentence(character: Character) -> str:
+        description = describe(character)
+        article = "an" if description[:1].lower() in "aeiou" else "a"
+        return f"{character.name} is {article} {description}."
+    return " ".join(sentence(character) for character in characters)
+
+
+def get_genders_text(characters: list[Character]) -> str:
+    """The genders of the given characters in natural language (eg "Lydia is a female. Arngeir is a male.")"""
+    return _describe_characters(characters, lambda c: c.gender)
+
+
+def get_races_text(characters: list[Character]) -> str:
+    """The races of the given characters in natural language (eg "Lydia is a Nord. Arngeir is a Greybeard.")"""
+    return _describe_characters(characters, lambda c: c.race)
+
+
+def get_genders_and_races_text(characters: list[Character]) -> str:
+    """The combined genders and races of the given characters in natural language (eg "Lydia is a female Nord. Arngeir is a male Greybeard.")"""
+    return _describe_characters(characters, lambda c: f"{c.gender} {c.race}")

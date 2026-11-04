@@ -1,0 +1,23 @@
+{
+    "identifier": "mantella_npc_absolvecrime",
+    "name": "AbsolveCrime",
+    "description": "Absolve a non-violent crime the player has been accused of.",
+    "note": "This action will fail if a guard is not in the conversation, and the NPC will be informed as such. If the AddToConversation action is enabled, these actions can synergise to allow NPCs to call over a nearby guard to absolve the crime.",
+    "key": "AbsolveCrime",
+    "parameters": {
+        "crime_gold": {
+            "type": "integer",
+            "description": "The bounty amount to absolve. Common crime bounties: Trespassing: 5, Lockpicking: 5, Loitering: 10, Pickpocketing: 25, Jailbreak: 100.",
+            "minimum": 1,
+            "maximum": 1000
+        }
+    },
+    "required": ["crime_gold"],
+    "allowed_games": ["skyrim"],
+    "requires_response": true,
+    "is-interrupting": false,
+    "allow_repeat": false,
+    "one-on-one": true,
+    "multi-npc": true,
+    "radiant": false
+}

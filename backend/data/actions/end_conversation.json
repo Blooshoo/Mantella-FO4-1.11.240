@@ -1,0 +1,15 @@
+{
+    "identifier": "mantella_end_conversation",
+    "name": "EndConversation",
+    "description": "End the current conversation.",
+    "note": "By default, this action is only enabled for radiant conversations. See the 'one-on-one', 'multi-npc', and 'radiant' toggles below.",
+    "key": "EndConversation",
+    "prompt": "When the conversation naturally concludes, begin your response with '{key}:'",
+    "allowed_games": ["skyrim", "fallout4"],
+    "requires_response": false,
+    "is-interrupting": false,
+    "allow_repeat": false,
+    "one-on-one": false,
+    "multi-npc": false,
+    "radiant": true
+}

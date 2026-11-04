@@ -1,0 +1,660 @@
+import sys
+import numpy as np
+from faster_whisper import WhisperModel
+from src.config.config_loader import ConfigLoader
+from src.llm.client_base import ClientBase
+from src.stt.ptt_controller import PTTController
+import src.utils as utils
+import requests
+import json
+import io
+from pathlib import Path
+from openai import OpenAI
+from typing import Optional, TYPE_CHECKING
+from datetime import datetime
+import queue
+import threading
+import time
+import os
+import wave
+if TYPE_CHECKING:
+    from sounddevice import InputStream
+from silero_vad_lite import SileroVAD
+
+logger = utils.get_logger()
+
+try:
+    from moonshine_onnx import MoonshineOnnxModel, load_tokenizer
+    has_moonshine = True
+except ModuleNotFoundError:
+    has_moonshine = False
+    logger.warning("moonshine_onnx is not available, Moonshine stt will not work")
+
+
+class Transcriber:
+    """Handles real-time speech-to-text transcription using Moonshine."""
+    
+    SAMPLING_RATE = 16000
+    CHUNK_SIZE = 512  # Required chunk size for Silero VAD
+    CHUNK_DURATION = CHUNK_SIZE / SAMPLING_RATE  # Explicit calculation of chunk duration in seconds
+    LOOKBACK_CHUNKS = 5  # Number of chunks to keep in buffer when not recording
+    MIN_PTT_DURATION = 0.3  # Minimum seconds of audio to accept from a PTT press
+    
+    @utils.time_it
+    def __init__(self, config: ConfigLoader):
+        self.loglevel = 27
+        self.language = config.stt_language
+        self.task = "translate" if config.stt_translate == 1 else "transcribe"
+        self.stt_service = config.stt_service
+        self.full_moonshine_model = config.moonshine_model
+        self.moonshine_model, self.moonshine_precision = self.full_moonshine_model.rsplit('/', 1)
+        self.moonshine_folder = config.moonshine_folder
+        self.moonshine_model_path = os.path.join(self.moonshine_folder, self.full_moonshine_model)
+        self.whisper_model = config.whisper_model
+        self.process_device = config.whisper_process_device
+        self.listen_timeout = config.listen_timeout
+        self.external_whisper_service = config.external_whisper_service
+        self.whisper_service = config.whisper_url
+        self.whisper_url = self.__get_endpoint(config.whisper_url)
+        self.prompt = ''
+        self.show_mic_warning = True
+        self.play_cough_sound = config.play_cough_sound
+        self.transcription_times = []
+        self.proactive_mic_mode = config.proactive_mic_mode
+        self.min_refresh_secs = config.min_refresh_secs # Minimum time between transcription updates
+        self.refresh_freq = self.min_refresh_secs // self.CHUNK_DURATION # Number of chunks between transcription updates
+        self.pause_threshold = config.pause_threshold
+        self._temporary_pause_override: float | None = None  # Temporary pause threshold for Listen action
+        self.audio_threshold = config.audio_threshold
+        logger.log(self.loglevel, f"Audio threshold set to {self.audio_threshold}. If the mic is not picking up your voice, try lowering this `Speech-to-Text`->`Audio Threshold` value in the Mantella UI. If the mic is picking up too much background noise, try increasing this value.\n")
+
+        # PTT settings
+        self.ptt_enabled = config.ptt_enabled
+        self._ptt = PTTController(config.ptt_hotkey if self.ptt_enabled else None)
+        self._ptt_active = False
+
+        self.__audio_input_error_count = 0
+        self.__mic_input_process_error_count = 0
+        self.__processing_audio_error_count = 0
+        self.__warning_frequency = 5
+        
+        self.__save_mic_input = config.save_mic_input
+        if self.__save_mic_input:
+            self.__mic_input_path: str = os.path.join(config.save_folder, "data", "tmp", "mic")
+            os.makedirs(self.__mic_input_path, exist_ok=True)
+
+        self.__stt_service_name = config.whisper_url
+        self.__api_key: str | None = self.__get_api_key()
+        self.__initial_client: OpenAI | None = None
+        if (self.stt_service == 'whisper') and (self.__api_key) and ('openai' in self.whisper_url) and (self.external_whisper_service):
+            self.__initial_client = self.__generate_sync_client() # initialize first client in advance to save time
+
+        self.__ignore_list = ['', 'thank you', 'thank you for watching', 'thanks for watching', 'the transcript is from the', 'the', 'thank you very much', "thank you for watching and i'll see you in the next video", "we'll see you in the next video", 'see you next time']
+
+        if has_moonshine:
+            self.transcribe_model: WhisperModel | MoonshineOnnxModel | None = None
+        else:
+            self.transcribe_model: WhisperModel | None = None
+
+        if self.stt_service == 'whisper' or not has_moonshine:
+            # if using faster_whisper, load model selected by player, otherwise skip this step
+            if self.stt_service != 'whisper':
+                logger.error("Moonshine selected but moonshine not installed, trying whisper")
+
+            if not self.external_whisper_service:
+                if self.process_device == 'cuda':
+                    logger.error(f'''Depending on your NVIDIA CUDA version, setting the Whisper process device to `cuda` may cause errors! For more information, see here: https://github.com/SYSTRAN/faster-whisper#gpu''')
+                    try:
+                        self.transcribe_model = WhisperModel(self.whisper_model, device=self.process_device)
+                    except Exception as e:
+                        utils.play_error_sound()
+                        raise e
+                else:
+                    self.transcribe_model = WhisperModel(self.whisper_model, device=self.process_device, compute_type="float32")
+        else:
+            if self.language != 'en':
+                logger.warning(f"Selected language is '{self.language}', but Moonshine only supports English. Please change the selected speech-to-text model to Whisper in `Speech-to-Text`->`STT Service` in the Mantella UI")
+
+            if self.moonshine_model == 'moonshine/tiny':
+                logger.warning('Speech-to-text model set to Moonshine Tiny. If mic input is being transcribed incorrectly, try switching to a larger model in the `Speech-to-Text` tab of the Mantella UI')
+            
+            if os.path.exists(f'{self.moonshine_model_path}/encoder_model.onnx'):
+                logger.log(self.loglevel, 'Loading local Moonshine model...')
+                self.transcribe_model = MoonshineOnnxModel(models_dir=self.moonshine_model_path, model_name=self.moonshine_model)
+            else:
+                logger.log(self.loglevel, 'Loading Moonshine model from Hugging Face...')
+                self.transcribe_model = MoonshineOnnxModel(model_name=self.moonshine_model, model_precision=self.moonshine_precision)
+            self.tokenizer = load_tokenizer()
+        
+        # Initialize VAD
+        self.vad = SileroVAD(self.SAMPLING_RATE)
+        
+        # Audio processing state
+        self._audio_buffer = np.array([], dtype=np.float32)
+        self._audio_queue = queue.Queue()
+        self._stream: Optional[InputStream] = None
+        
+        # Threading and synchronization
+        self._lock = threading.Lock()
+        self._processing_thread: Optional[threading.Thread] = None
+        self._running = False
+        
+        # Speech detection state
+        self._speech_detected = False
+        # Stays True from a finalized non-empty transcription until it is consumed by get_latest_transcription
+        self._has_unconsumed_transcription = False
+        self._speech_end_time = 0
+        self._last_update_time = 0
+        self._current_transcription = ""
+        self._transcription_ready = threading.Event()
+        self._consecutive_empty_count = 0
+        self._max_consecutive_empty = 10
+
+    @property
+    def is_listening(self) -> bool:
+        """Returns True if actively listening."""
+        return self._processing_thread is not None and self._processing_thread.is_alive()
+
+    @property
+    def has_player_spoken(self) -> bool:
+        """Check if speech has been detected, or a finalized transcription is still waiting to be consumed."""
+        with self._lock:
+            return self._speech_detected or self._has_unconsumed_transcription
+    
+    def set_temporary_pause(self, pause_seconds: float) -> None:
+        """Set a temporary pause threshold override for the next transcription
+        
+        This is used by the Listen action to give the player more time to formulate their response.
+        The temporary pause will be automatically cleared after the next successful transcription.
+        
+        Args:
+            pause_seconds: The pause threshold in seconds
+        """
+        with self._lock:
+            self._temporary_pause_override = pause_seconds
+            # If already listening and speech hasn't been detected yet, recreate VAD iterator with new pause threshold
+            if self._running and not self._speech_detected:
+                self.vad_iterator = self._create_vad_iterator()
+        
+
+    @utils.time_it
+    def __generate_sync_client(self):
+        if self.__initial_client:
+            client = self.__initial_client
+            self.__initial_client = None # do not reuse the same client
+        else:
+            client = OpenAI(api_key=self.__api_key, base_url=self.whisper_url)
+
+        return client
+    
+
+    @utils.time_it
+    def __get_endpoint(self, whisper_url):
+        known_endpoints = {
+            'OpenAI': 'https://api.openai.com/v1',
+            'Groq': 'https://api.groq.com/openai/v1',
+            'whisper.cpp': 'http://127.0.0.1:8080/inference',
+        }
+        if whisper_url in known_endpoints:
+            return known_endpoints[whisper_url]
+        else: # if not found, use value as is
+            return whisper_url
+        
+
+    @utils.time_it
+    def __get_api_key(self) -> str | None:
+        if not self.external_whisper_service:
+            return None
+
+        api_key = ClientBase._get_api_key(self.__stt_service_name, show_error=False)
+        if api_key:
+            return api_key
+
+        if utils.is_local_url(self.whisper_url):
+            return 'abc123'
+
+        logger.error('''No secret key found in GPT_SECRET_KEY.txt. Please create a secret key and paste it in your Mantella mod folder's GPT_SECRET_KEY.txt file.
+If using OpenAI, see here on how to create a secret key: https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key
+If you would prefer to run speech-to-text locally, please ensure the `Speech-to-Text`->`External Whisper Service` setting in the Mantella UI is disabled.''')
+        input("Press Enter to continue.")
+        sys.exit(0)
+
+
+    @utils.time_it
+    def _transcribe(self, audio: np.ndarray) -> str:
+        """Transcribe audio using Moonshine model."""
+        # Count speech end time from when the last transcribe is called
+        self._speech_end_time = time.time()
+        if self.stt_service == 'moonshine':
+            transcription = self.moonshine_transcribe(audio)
+        else:
+            transcription = self.whisper_transcribe(audio, self.prompt)
+
+        self.transcription_times.append((time.time() - self._speech_end_time))
+        if (self.proactive_mic_mode) and (len(self.transcription_times) % 5 == 0):
+            max_transcription_time = max(self.transcription_times[-5:])
+            if max_transcription_time > self.min_refresh_secs:
+                logger.warning(f'Mic transcription took {round(max_transcription_time,3)} to process. To improve performance, try setting `Speech-to-Text`->`Refresh Frequency` to a value slightly higher than {round(max_transcription_time,3)} in the Mantella UI')
+
+        if self.proactive_mic_mode:
+            logger.log(self.loglevel, f'Interim transcription: {transcription}')
+        
+        # Only update the transcription if it contains a value, otherwise keep the existing transcription
+        if transcription:
+            return transcription
+        else:
+            self._consecutive_empty_count += 1
+            return self._current_transcription
+
+
+    @utils.time_it
+    def whisper_transcribe(self, audio: np.ndarray, prompt: str):
+        if self.transcribe_model: # local model
+            segments, _ = self.transcribe_model.transcribe(audio, task=self.task, language=self.language, beam_size=5, vad_filter=False, initial_prompt=prompt)
+            result_text = ' '.join(segment.text for segment in segments)
+            if utils.clean_text(result_text) in self.__ignore_list: # common phrases hallucinated by Whisper
+                return ''
+            return result_text
+        
+        # Server versions of Whisper require the audio data to be a file type
+        audio_file = io.BytesIO()
+        audio_int16 = (audio * 32767).astype(np.int16)
+        with wave.open(audio_file, 'wb') as wf:
+            wf.setnchannels(1)  # Mono audio
+            wf.setsampwidth(2)  # 16-bit audio
+            wf.setframerate(self.SAMPLING_RATE)
+            wf.writeframes(audio_int16.tobytes())
+        audio_file.seek(0)
+        # Audio file needs a name or else Whisper gets angry
+        audio_file.name = 'out.wav'
+
+        if 'openai' in self.whisper_url: # OpenAI compatible endpoint
+            client = self.__generate_sync_client()
+            try:
+                response_data = client.audio.transcriptions.create(model=self.whisper_model, language=self.language, file=audio_file, prompt=prompt)
+            except Exception as e:
+                utils.play_error_sound()
+                if e.code in [404, 'model_not_found']:
+                    if self.whisper_service == 'OpenAI':
+                        logger.error(f"Selected Whisper model '{self.whisper_model}' does not exist in the OpenAI service. Try changing 'Speech-to-Text'->'Model Size' to 'whisper-1' in the Mantella UI")
+                    elif self.whisper_service == 'Groq':
+                        logger.error(f"Selected Whisper model '{self.whisper_model}' does not exist in the Groq service. Try changing 'Speech-to-Text'->'Model Size' to one of the following models in the Mantella UI: https://console.groq.com/docs/speech-text#supported-models")
+                    else:
+                        logger.error(f"Selected Whisper model '{self.whisper_model}' does not exist in the selected service {self.whisper_service}. Try changing 'Speech-to-Text'->'Model Size' to a compatible model in the Mantella UI")
+                else:
+                    logger.error(f'STT error: {e}')
+                input("Press Enter to exit.")
+            client.close()
+            if utils.clean_text(response_data.text) in self.__ignore_list: # common phrases hallucinated by Whisper
+                return ''
+            return response_data.text.strip()
+        else: # custom server model
+            data = {'model': self.whisper_model, 'prompt': prompt}
+            files = {'file': ('audio.wav', audio_file, 'audio/wav')}
+            response = requests.post(self.whisper_url, files=files, data=data)
+            if response.status_code != 200:
+                logger.error(f'STT Error: {response.content}')
+            response_data = json.loads(response.text)
+            if 'text' in response_data:
+                if utils.clean_text(response_data['text']) in self.__ignore_list: # common phrases hallucinated by Whisper
+                    return ''
+                return response_data['text'].strip()
+            
+
+    @utils.time_it
+    def moonshine_transcribe(self, audio: np.ndarray) -> str:
+        """Transcribe audio using Moonshine model"""
+        tokens = self.transcribe_model.generate(audio[np.newaxis, :].astype(np.float32))
+        text = self.tokenizer.decode_batch(tokens)[0]
+        text = self.ensure_sentence_ending(text)
+        
+        return text
+    
+
+    def ensure_sentence_ending(self, text: str) -> str:
+        '''Moonshine transcriptions tend to be missing sentence-ending characters, which can confuse LLMs'''
+        if not text:  # Handle empty string
+            return text
+        
+        end_chars = {'.', '?', '!', ':', ';', '。'}
+        
+        if text[-1] == ',':
+            return text[:-1] + '.'
+        elif text[-1] not in end_chars:
+            return text + '.'
+        
+        return text
+
+
+    @utils.time_it
+    def start_listening(self, prompt: str = '') -> None:
+        '''Start background listening thread'''
+        if self._running:
+            return
+            
+        self._running = True
+        self._reset_state()
+        self.prompt = prompt
+        
+        # Start audio stream
+        from sounddevice import InputStream
+        self._stream = InputStream(
+            samplerate=self.SAMPLING_RATE,
+            channels=1,
+            blocksize=self.CHUNK_SIZE,
+            dtype=np.float32,
+            callback=self._create_input_callback(self._audio_queue),
+            latency = 'low'
+        )
+        self._stream.start()
+        
+        # Start processing thread
+        self._processing_thread = threading.Thread(
+            target=self._process_audio,
+            daemon = True
+        )
+        self._processing_thread.start()
+        logger.log(self.loglevel, 'Listening...')
+
+
+    def _process_audio(self) -> None:
+        """Process audio data in a separate thread."""
+        lookback_size = self.LOOKBACK_CHUNKS * self.CHUNK_SIZE
+        chunk_count = 0
+        
+        while self._running:
+            try:
+                chunk, status = self._audio_queue.get(timeout=0.1)
+                if status:
+                    if self.__processing_audio_error_count % self.__warning_frequency == 0:
+                        logger.log(23, f"STT WARNING: Processing audio error: {status}")
+                    self.__processing_audio_error_count += 1
+                    continue
+
+                with self._lock:
+                    if self.ptt_enabled:
+                        self._process_ptt_chunk(chunk)
+                    else:
+                        chunk_count = self._process_vad_chunk(chunk, lookback_size, chunk_count)
+
+            except queue.Empty:
+                logger.debug('Queue is empty')
+                continue
+            except Exception as e:
+                if self.__mic_input_process_error_count % self.__warning_frequency == 0:
+                    logger.log(23, f'STT WARNING: Error processing mic input: {str(e)}')
+                self.__mic_input_process_error_count += 1
+                self._reset_state()
+                time.sleep(0.1)
+
+
+    def _finalize_transcription(self, *, transcribe: bool = True, save: bool = True) -> None:
+        """Transcribe buffered audio, signal readiness, and reset state.
+
+        Must be called while holding ``self._lock``.
+
+        Args:
+            transcribe: Whether to run transcription on the current buffer.
+            save: Whether to save the audio buffer to disk (if ``save_mic_input`` also set).
+        """
+        if transcribe and len(self._audio_buffer) > 0:
+            transcription_start_time = time.time()
+            self._current_transcription = self._transcribe(self._audio_buffer)
+            logger.log(self.loglevel, f'STT took {round(time.time() - transcription_start_time, 5)} seconds to transcribe')
+        if save and self.__save_mic_input and len(self._audio_buffer) > 0:
+            self._save_audio(self._audio_buffer)
+        self._transcription_ready.set()
+        # capture whether a transcription is pending, since _reset_state clears the speech flags
+        has_transcription = bool(self._current_transcription and self._current_transcription.strip())
+        self._reset_state()
+        self._has_unconsumed_transcription = has_transcription
+
+
+    def _process_ptt_chunk(self, chunk: np.ndarray) -> None:
+        """Process a single audio chunk in PTT mode.
+
+        Must be called while holding ``self._lock``.
+        When PTT is enabled, VAD-based detection is completely bypassed.
+        Audio is accumulated only while the hotkey is held -
+        on release the buffer is transcribed in one shot.
+        """
+        is_pressed = self._ptt.is_pressed()
+
+        if is_pressed:
+            # Accumulate audio while key is held
+            self._audio_buffer = np.concatenate((self._audio_buffer, chunk))
+            if not self._ptt_active:
+                logger.log(self.loglevel, 'PTT pressed')
+                self._ptt_active = True
+                self._speech_detected = True
+                self._last_update_time = time.time()
+        elif self._ptt_active:
+            # Key released after being held — attempt transcription
+            logger.log(self.loglevel, 'PTT released - transcribing')
+            audio_duration = len(self._audio_buffer) / self.SAMPLING_RATE if len(self._audio_buffer) > 0 else 0
+
+            if len(self._audio_buffer) > 0 and audio_duration >= self.MIN_PTT_DURATION:
+                self._finalize_transcription()
+            else:
+                logger.debug(f'PTT released with insufficient audio (duration: {audio_duration:.3f}s, min: {self.MIN_PTT_DURATION}s)')
+                self._reset_state()
+        else:
+            # Idle: clear buffer so stale data doesn't accumulate
+            self._audio_buffer = np.array([], dtype=np.float32)
+
+        # Timeout guard: prevent unbounded buffering from a stuck key
+        if self._ptt_active and (len(self._audio_buffer) / self.SAMPLING_RATE) > self.listen_timeout:
+            logger.warning(f'PTT timeout of {self.listen_timeout} seconds reached. Processing mic input...')
+            self._finalize_transcription()
+
+
+    def _process_vad_chunk(self, chunk: np.ndarray, lookback_size: int, chunk_count: int) -> int:
+        """Process a single audio chunk using VAD-based speech detection.
+
+        Must be called while holding ``self._lock``.
+
+        Args:
+            chunk: Raw audio samples for this frame.
+            lookback_size: Maximum buffer size (in samples) to keep when not recording.
+            chunk_count: Running counter of chunks since last proactive transcription update.
+
+        Returns:
+            The (possibly reset) chunk_count for the caller to carry forward.
+        """
+        # Update audio buffer
+        self._audio_buffer = np.concatenate((self._audio_buffer, chunk))
+        if not self._speech_detected:
+            # Keep limited lookback buffer when not recording
+            self._audio_buffer = self._audio_buffer[-lookback_size:]
+
+        # Process with VAD
+        probability = self.vad.process(chunk)
+
+        if probability > self.audio_threshold:
+            self._last_update_time = time.time()
+
+        if probability > self.audio_threshold and not self._speech_detected:
+            logger.log(self.loglevel, 'Speech detected')
+            self._speech_detected = True
+
+        effective_pause = self._temporary_pause_override if self._temporary_pause_override is not None else self.pause_threshold
+        if probability <= self.audio_threshold and self._speech_detected and time.time() - self._last_update_time > effective_pause:
+            logger.log(self.loglevel, 'Speech ended')
+            self._finalize_transcription(transcribe=not self.proactive_mic_mode)
+            return chunk_count
+
+        if not self._speech_detected:
+            return chunk_count
+        chunk_count += 1
+
+        # Check for maximum speech duration
+        if (len(self._audio_buffer) / self.SAMPLING_RATE) > self.listen_timeout:
+            logger.warning(f'Listen timeout of {self.listen_timeout} seconds reached. Processing mic input...')
+            self._finalize_transcription(save=False)
+            return chunk_count
+
+        # Periodic proactive transcription update
+        if self.proactive_mic_mode and chunk_count >= self.refresh_freq:
+            logger.debug(f'Transcribing {self.min_refresh_secs} of mic input...')
+            self._current_transcription = self._transcribe(self._audio_buffer)
+
+            if self._consecutive_empty_count >= self._max_consecutive_empty:
+                logger.warning(f'Could not transcribe input')
+                self._transcription_ready.set()
+                self._reset_state()
+
+            chunk_count = 0
+
+        return chunk_count
+
+
+    def _create_input_callback(self, q: queue.Queue):
+        """Create callback for audio input stream."""
+        def input_callback(indata, frames, time, status):
+            if status:
+                if self.__audio_input_error_count % self.__warning_frequency == 0:
+                    logger.log(23, f"STT WARNING: Audio input error: {status}")
+                self.__audio_input_error_count += 1
+            # Store both data and status in queue
+            q.put((indata.copy().flatten(), status))
+        return input_callback
+
+
+    def _reset_state(self) -> None:
+        """Reset internal state."""
+        self._speech_detected = False
+        self._has_unconsumed_transcription = False
+        # Ensure PTT state is cleared on any reset
+        try:
+            self._ptt_active = False
+        except Exception:
+            pass
+        self._audio_buffer = np.array([], dtype=np.float32)
+        self.vad = SileroVAD(self.SAMPLING_RATE)
+        self._consecutive_empty_count = 0
+
+
+    @utils.time_it
+    def _save_audio(self, audio: np.ndarray) -> None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        audio_path = os.path.join(self.__mic_input_path, f'mic_input_{timestamp}.wav')
+        with wave.open(audio_path, 'wb') as wf:
+            wf.setnchannels(1)  # Mono audio
+            wf.setsampwidth(2)  # 16-bit audio
+            wf.setframerate(self.SAMPLING_RATE)
+            # Convert float32 to int16
+            audio_int16 = (audio * 32767).astype(np.int16)
+            wf.writeframes(audio_int16.tobytes())
+
+
+    @utils.time_it
+    def get_latest_transcription(self, silence_timeout: float = 0) -> str | None:
+        """Get the latest transcription, blocking until speech ends or silence timeout
+        
+        Args:
+            silence_timeout: How long to wait (in seconds) for speech before returning None. If 0 or negative, waits indefinitely.
+        
+        Returns:
+            The transcribed text, or None if silence_timeout elapsed without any speech being detected
+        """
+        while True:
+            # Use timeout only if silence_timeout > 0 and player hasn't started speaking yet
+            use_timeout = silence_timeout > 0 and not self._speech_detected
+            timeout_value = silence_timeout if use_timeout else None
+            
+            received_transcription = self._transcription_ready.wait(timeout=timeout_value)
+            
+            if not received_transcription and use_timeout and not self._speech_detected:
+                logger.log(self.loglevel, f"Silence timeout of {silence_timeout} seconds reached without speech")
+                return None
+            
+            with self._lock:
+                transcription = self._current_transcription
+                self._current_transcription = ''
+                if transcription:
+                    self._transcription_ready.clear()
+                    self._speech_detected = False
+                    self._has_unconsumed_transcription = False
+                    self._temporary_pause_override = None  # Reset temporary pause after transcription
+                    logger.log(self.loglevel, f"Player said '{transcription.strip()}'")
+                    return transcription
+
+            if self.play_cough_sound:
+                utils.play_no_mic_input_detected_sound()
+            logger.warning('Could not detect speech from mic input')
+
+            self._transcription_ready.clear()
+            self._speech_detected = False
+            self._has_unconsumed_transcription = False
+            self._current_transcription = ''
+
+            time.sleep(0.1)
+
+
+    def stop_listening(self) -> None:
+        """Stop listening for speech."""
+        if not self._running:
+            return
+            
+        self._running = False
+        self._speech_detected = False
+        
+        # Stop and clean up audio stream
+        if self._stream:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+        
+        # Wait for processing thread to finish
+        if self._processing_thread:
+            self._processing_thread.join()  # timeout=1.0 Add timeout to prevent hanging
+            self._processing_thread = None
+        
+        # Clear queue
+        while not self._audio_queue.empty():
+            try:
+                self._audio_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        # Drop any transcription that was finalized but never consumed, so it cannot trigger a "phantom"
+        # interruption or be picked up as stale input at the start of the next conversation
+        with self._lock:
+            self._speech_detected = False
+            self._has_unconsumed_transcription = False
+            self._current_transcription = ''
+            self._transcription_ready.clear()
+                
+        self._reset_state()
+        logger.log(self.loglevel, 'Stopped listening for mic input')
+
+
+    @staticmethod
+    @utils.time_it
+    def activation_name_exists(transcript: str, activation_names: str | list[str]) -> bool:
+        """Identifies keyword in the input transcript"""
+        if not transcript:
+            return False
+
+        # Convert to a list even if there is only one activation name
+        if isinstance(activation_names, str):
+            activation_names = [activation_names]
+
+        # Check for a match among individual words in the transcript
+        transcript_words = transcript.split()
+        if set(transcript_words).intersection(activation_names):
+            return True
+
+        # Alternatively, if the entire transcript is a keyword, return True
+        for activation_name in activation_names:
+            if transcript == activation_name:
+                return True
+
+        return False
+
+
+    @staticmethod
+    @utils.time_it
+    def _remove_activation_word(transcript, activation_name):
+        transcript = transcript.replace(activation_name, '')
+        return transcript

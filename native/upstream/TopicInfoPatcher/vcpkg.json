@@ -1,0 +1,13 @@
+{
+  "name": "topicinfopatcher",
+  "version-string": "1.0.0",
+  "description": "Patches TopicInfo text for Mantella F4",
+  "homepage": "https://www.nexusmods.com/fallout4/mods/79747",
+  "license": "MIT",
+  "dependencies": [
+    "boost-stl-interfaces",
+    "fmt",
+    "rsm-mmio",
+    "spdlog"
+  ]
+}
