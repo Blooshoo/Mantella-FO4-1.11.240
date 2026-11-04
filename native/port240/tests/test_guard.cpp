@@ -28,6 +28,15 @@ static std::vector<std::uint8_t> make_addrlib(std::vector<std::pair<std::uint64_
 	return b;
 }
 
+// Tripwire helpers used by TopicInfoPatcher's compile-time assertions (offsets240.h).
+static_assert(offset_known("TESTopicInfo::SetOverrideFileName") && !offset_verified("TESTopicInfo::SetOverrideFileName"));
+static_assert(offset_known("BSAudioManager::ClearCache") && !offset_verified("BSAudioManager::ClearCache"));
+static_assert(offset_known("ViewCasterUpdate event source") && !offset_verified("ViewCasterUpdate event source"));
+static_assert(offset_known("BSPointerHandle lookup (crosshair)") && !offset_verified("BSPointerHandle lookup (crosshair)"));
+static_assert(offset_known("TakeScreenshot") && !offset_verified("TakeScreenshot") && offset_id("TakeScreenshot") == 2229158);
+static_assert(offset_verified("BSStringPool::GetEntry<char>") && offset_verified("BSStringPool::Entry::Release"));
+static_assert(!offset_known("no such offset") && !offset_verified("no such offset") && offset_id("no such offset") == 0);
+
 static void test_addrlib_parse() {
 	auto good = make_addrlib({ { 1, 0x10 }, { 5, 0x50 }, { 9, 0x90 } });
 	auto lib = AddressLibrary::parse(good);

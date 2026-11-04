@@ -1,39 +1,41 @@
-#include <Windows.h>
+// kalli/port-240: migrated from the pre-NG CommonLibF4 API onto libxse/commonlibf4 7c8c6f8 (the only
+// supported build dependency for 1.11.240, see port240/include/mantella240/offsets240.h). Supported runtime:
+// Fallout 4 1.11.240 only - the plugin refuses to load elsewhere (F4SEPlugin_Load) and declares nothing else.
+// No <Windows.h>: libxse's REX::W32 declarations are used instead, so Windows macros (ERROR, MAX_PATH, ...)
+// never meet REX names. Engine calls with no established 1.11.240 target are NOT compiled in; each omission
+// carries a static_assert tripwire against offsets240.h (see offset_known / offset_verified there).
 #include "Guard240.h"  // kalli/port-240: fail-closed offset guard (port240/plugin)
 #include "mantella240/topic_patch.h"  // kalli/port-240: PatchTopicInfo decision logic (port240/include)
+#include <array>
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 
-bool isVR;
+// Tripwire: `name` must be a known offset that is NOT Verified, because the code that would use it is
+// omitted. Fails the build if offsets240.h upgrades it without the reviewed relocation being added here.
+#define MANTELLA240_OMITTED_ENGINE_CALL(name) \
+	static_assert(mantella240::offset_known(name) && !mantella240::offset_verified(name), \
+		"offsets240.h verified " name " for 1.11.240: add its reviewed relocation here before enabling the native")
 
-// kalli/port-240: on runtime 1.11.240 every engine-touching native must pass the guard.
-// Other runtimes keep upstream behaviour unchanged.
+// kalli/port-240: every engine-touching native must pass the guard. Fails closed: the plugin only loads on
+// 1.11.240, so a native running anywhere else (or before the guard ran) is refused.
 static bool gate(std::string_view native) {
-	auto& st = mantella240::plugin::state();
-	if (!st.runtime_is_240) return true;
 	if (mantella240::plugin::allowed(native)) return true;
-	logger::warn("{} disabled on 1.11.240 (see TopicInfoPatcher.log guard lines)", native);
+	REX::WARN("{} disabled on 1.11.240 (see TopicInfoPatcher.log guard lines)", native);
 	return false;
 	}
 
-void init_log() {
-	std::optional<std::filesystem::path> logpath = logger::log_directory();
-
-	const char* plugin_name = Version::PROJECT.data();
-	*logpath /= fmt::format(FMT_STRING("{}.log"), plugin_name);
-	auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logpath->string(), true);
-
-	auto log = std::make_shared<spdlog::logger>("global log"s, std::move(sink));
-
-	log->set_level(spdlog::level::trace);
-	log->flush_on(spdlog::level::trace);
-
-	spdlog::set_default_logger(std::move(log));
-	spdlog::set_pattern("[%T.%e] [%=5t] [%L] %v"s);
-
-	logger::info("{} v{}", Version::PROJECT, Version::NAME);
-	}
+// Logging: upstream init_log() (My Games/<game>/F4SE/TopicInfoPatcher.log, trace level, flush on trace,
+// pattern "[%T.%e] [%=5t] [%L] %v") is reproduced by libxse F4SE::Init's InitLog with the InitInfo below.
+// Upstream called F4SE::Init(a_f4se, false) = { .log = false } and then its own init_log().
+static constexpr F4SE::InitInfo kInitInfo{
+	.log = true,
+	.logLevel = REX::ELogLevel::Trace,
+	.logName = "TopicInfoPatcher",
+	.logPattern = "[%T.%e] [%=5t] [%L] %v",
+	.hook = false,  // this plugin installs no REL hooks
+};
 
 extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info) {
 
@@ -43,7 +45,7 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a
 
 	
 	if (a_f4se->IsEditor()) {
-		logger::critical("loaded in editor");
+		REX::CRITICAL("loaded in editor");
 		return false;
 	}
 
@@ -118,9 +120,7 @@ bool restoreInt(std::monostate, std::string key) {
 	return ret;
 	}
 
-extern void RegisterCrosshair();
-extern std::vector<RE::Actor*> GetLastCrossHairActor(std::monostate);
-extern std::vector<float> GetLastActorCoords(std::monostate);
+extern std::vector<float> GetLastActorCoords(std::monostate);  // Crosshair.cpp
 
 void MessageHandler(F4SE::MessagingInterface::Message* a_msg) {
 	if (!a_msg) {
@@ -130,15 +130,14 @@ void MessageHandler(F4SE::MessagingInterface::Message* a_msg) {
 	switch (a_msg->type) {
 
 	case F4SE::MessagingInterface::kGameDataReady: 	{
-		logger::info("GameDataReady");
+		REX::INFO("GameDataReady");
 		GameSettings = RE::GameSettingCollection::GetSingleton();
 		}
 		break;
 	case F4SE::MessagingInterface::kPostLoadGame:
 	case F4SE::MessagingInterface::kNewGame:
-		if (!REL::Module::IsVR() && gate("GetLastActorCoords")) {
-			RegisterCrosshair();
-			}
+		// kalli/port-240: upstream registered a crosshair event sink here (not on VR). Both its engine targets
+		// have no 1.11.240 mapping, so no sink exists; GetLastActorCoords stays disabled (Crosshair.cpp).
 		break;
 	}
 }
@@ -195,17 +194,8 @@ namespace topic_slot {
 	};
 }
 
-void CopyFuz(std::string fname) {							// Copy the generated FUZ file to the requested name
-	char exe_path[_MAX_PATH];
-
-	GetModuleFileNameA(NULL, exe_path, _MAX_PATH);			// Fallout exe
-	std::filesystem::path app_path(exe_path);
-	std::filesystem::path base_path(app_path.remove_filename());
-	base_path += "Data\\Sound\\Voice\\Mantella.esp\\MantellaVoice00";		// Path to Mantella voices directory
-	std::filesystem::path src_path(base_path / "00001ED2_1.fuz");
-	std::filesystem::path target_file(base_path / std::format("{}_1.fuz", fname));
-	CopyFile(src_path.c_str(), target_file.c_str(), false);
-	}
+// kalli/port-240: upstream CopyFuz (copy MantellaVoice00/00001ED2_1.fuz to "<name>_1.fuz") served only
+// SetOverrideFileName below and is omitted with it.
 
 // Replace the response text of a Mantella topic. kalli/port-240: publishes a NEW pooled string for this
 // one response (topic_slot::Ops) instead of rewriting shared pool memory.
@@ -215,59 +205,45 @@ int PatchTopicInfo(std::monostate, RE::TESTopic *topic , std::string new_text) {
 	if (!topic) return static_cast<int>(PatchResult::NoTopic);
 	// Sanity checks, to avoid touching the wrong record
 	if (topic->numTopicInfos != 1 || !topic->topicInfos || !topic->topicInfos[0] || !topic->topicInfos[0]->responses.head) {
-		logger::warn("Topic {:X}: not a single-response Mantella topic", topic->formID);
+		REX::WARN("Topic {:X}: not a single-response Mantella topic", topic->formID);
 		return static_cast<int>(PatchResult::BadRecord);
 	}
 	RE::TESTopicInfo* tpInfo = topic->topicInfos[0];
 	RE::TESResponse* response = tpInfo->responses.head;
-	logger::info("Topic {:X} TopicInfo {:X} Text: {}", topic->formID, tpInfo->formID, new_text);
+	REX::INFO("Topic {:X} TopicInfo {:X} Text: {}", topic->formID, tpInfo->formID, new_text);
 
 	const PatchResult r = mantella240::patch_response(g_topicPatch, response, new_text, topic_slot::Ops{});
-	if (r == PatchResult::TooLong) logger::warn("Replacement too long! ({:d})", new_text.length());
+	if (r == PatchResult::TooLong) REX::WARN("Replacement too long! ({:d})", new_text.length());
 	else if (r == PatchResult::RetentionFull) {
 		if (g_topicPatch.sealed() || g_topicPatch.retained() + g_topicPatch.unrecorded() >= mantella240::kMaxRetainedEntries)
-			logger::critical("PatchTopicInfo: string retention exhausted; refusing further patches this session (restart the game)");
+			REX::CRITICAL("PatchTopicInfo: string retention exhausted; refusing further patches this session (restart the game)");
 		else
-			logger::error("PatchTopicInfo: could not reserve string bookkeeping (allocation failure); nothing was changed");
+			REX::ERROR("PatchTopicInfo: could not reserve string bookkeeping (allocation failure); nothing was changed");
 	}
-	else if (r == PatchResult::NotMantella) logger::warn("TopicInfo text is neither the Mantella placeholder nor our last text for this response");
+	else if (r == PatchResult::NotMantella) REX::WARN("TopicInfo text is neither the Mantella placeholder nor our last text for this response");
 	return static_cast<int>(r);
 	}
 
-void ClearCacheInternal(RE::BSAudioManager *) {									// Doesn't seem to do anything?
-	RE::BSAudioManager* AudioMan = RE::BSAudioManager::GetSingleton();
-
-	using func_t = decltype(ClearCacheInternal);
-	static REL::Relocation<func_t> func{ REL::ID(114073) };
-	func(AudioMan);
-	}
-
+// kalli/port-240: upstream called REL::ID(114073) on the BSAudioManager singleton ("doesn't seem to do
+// anything?"). That ID is absent from the 1.11.240 Address Library, so the call is omitted; the native
+// keeps its binding and the guard's documented disabled behaviour (no-op + log).
+MANTELLA240_OMITTED_ENGINE_CALL("BSAudioManager::ClearCache");
 void ClearCache(std::monostate) {
 	if (!gate("ClearCache")) return;
-	ClearCacheInternal(nullptr);
+	REX::CRITICAL("ClearCache: enabled without a 1.11.240 engine target; refusing");  // unreachable (tripwire)
 	}
 
 // Override the file name used for wav and lip files
 // We can use any name instead of the Topic FormID 
 
-void SetOverrideFileName_internal(RE::TESTopicInfo *Info, char * name, uint64_t , uint64_t){
-	using func_t = decltype(SetOverrideFileName_internal);
-	static REL::Relocation<func_t> func{ REL::VariantOffset(0x0621710, 0, 0x60C060)};	// Pre-NG, NG, VR
-
-	logger::info("Info: {:p} Name; {:p}", (void*)Info, (void*)name);
-	func(Info, name, 0, 0);
-	}
-
+// kalli/port-240: upstream used REL::VariantOffset(0x0621710, 0, 0x60C060) (pre-NG, NG = none, VR). There
+// is no NG/AE and no 1.11.240 target, so the engine call (and its CopyFuz file copy) is omitted; the
+// native keeps its binding and the guard's documented disabled behaviour (no-op + log). The current
+// official Mantella FO4 scripts do not call it (offsets240.h).
+MANTELLA240_OMITTED_ENGINE_CALL("TESTopicInfo::SetOverrideFileName");
 void SetOverrideFileName(std::monostate, RE::TESTopic* this_p, std::string name) {
 	if (!gate("SetOverrideFileName") || !this_p) return;
-	RE::TESTopicInfo* tpInfo = this_p->topicInfos[0];
-
-	if (name != "00001ED2") {
-		CopyFuz(name);
-		}
-
-	logger::info("SetOverrideFileName Info: {:p} name: {}", (void*) this_p, name.data());
-	SetOverrideFileName_internal(tpInfo, name.data(), 0, 0);
+	REX::CRITICAL("SetOverrideFileName({}): enabled without a 1.11.240 engine target; refusing", name);  // unreachable (tripwire)
 	}
 
 std::string StringRemoveWhiteSpace(std::monostate, std::string str) {
@@ -286,9 +262,13 @@ std::string StringRemoveWhiteSpace(std::monostate, std::string str) {
 	return std::string(start, end + 1);
 	}
 
+// kalli/port-240: upstream REL::RelocationID(919230, 2229158) = (pre-NG ID, NG/AE ID). The 1.11.240 database
+// resolves 2229158 to executable code (offsets240.h "TakeScreenshot", pattern-checked by the guard), but the
+// (filename, type, sstype) ABI is unproven, so the guard never enables TakeScreenShot (LocatedAbiUnproven).
 void TakeScreenShot_internal(char*filename, int filetype, int sstype) {
+	static_assert(mantella240::offset_id("TakeScreenshot") == 2229158);
 	using func_t = decltype(TakeScreenShot_internal);
-	static REL::Relocation<func_t> func{ REL::RelocationID(919230, 2229158) };
+	static REL::Relocation<func_t> func{ REL::ID(mantella240::offset_id("TakeScreenshot")) };
 
 	func(filename, filetype, sstype);
 
@@ -323,47 +303,48 @@ bool RegisterFunctions(RE::BSScript::IVirtualMachine* a_VM) {
 
 
 extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se) {
-	F4SE::Init(a_f4se,false);
+	F4SE::Init(a_f4se, kInitInfo);
 
-	init_log();
-
-	if (REL::Module::IsVR()) {
-		logger::info("is VR");
-		REL::Version F4SEver = a_f4se->F4SEVersion();
-		logger::info("F4SE Version is: {:d}.{:d}.{:d}.{:d}", F4SEver.major(), F4SEver.minor(), F4SEver.build(), F4SEver.patch());
-		if (F4SEver < REL::Version(0, 6, 21, 0)) {
-			MessageBox(NULL, L"Please update to F4SEVR Version 0.6.21.", L"Newer version of F4SEVR required!", 0);
-			ExitProcess(02);
-			}
+	// kalli/port-240: supported runtime is exactly 1.11.240 (no editor, no VR - libxse 7c8c6f8 has no VR
+	// runtime). Refuse before registering anything; the declared CompatibleVersions say the same.
+	if (a_f4se->IsEditor()) {
+		REX::CRITICAL("loaded in editor, refusing");
+		return false;
 		}
-	else {
-		logger::info("Not VR");
+	if (a_f4se->RuntimeVersion() != REL::Version(1, 11, 240, 0)) {
+		REX::CRITICAL("runtime is not 1.11.240, refusing to load");
+		return false;
 		}
 
 	// kalli/port-240: evaluate the guard against the loaded image before any native can run.
-	if (a_f4se->RuntimeVersion() == REL::Version(1, 11, 240, 0)) {
+	{
 		auto& st = mantella240::plugin::state();
 		st.runtime_is_240 = true;
-		char exe_path[_MAX_PATH];
-		GetModuleFileNameA(NULL, exe_path, _MAX_PATH);
-		std::filesystem::path addrlib = std::filesystem::path(exe_path).remove_filename() / "Data" / "F4SE" / "Plugins" / "version-1-11-240-0.bin";
-		bool ok = mantella240::plugin::evaluate_loaded(REL::Module::get().base(), addrlib,
-			[](const std::string& m) { logger::info("{}", m); });
-		if (!ok) {
-			logger::critical("1.11.240 guard failed: engine-touching natives stay disabled");
-			}
+		std::array<wchar_t, 32768> exe_path{};  // wide API: install paths may be non-ASCII
+		const auto n = REX::W32::GetModuleFileNameW(nullptr, exe_path.data(), static_cast<std::uint32_t>(exe_path.size()));
+		bool ok = false;
+		if (n == 0 || n >= exe_path.size()) {
+			REX::CRITICAL("guard: cannot determine the executable path");
+		} else {
+			std::filesystem::path addrlib = std::filesystem::path(std::wstring_view(exe_path.data(), n)).remove_filename() / "Data" / "F4SE" / "Plugins" / "version-1-11-240-0.bin";
+			ok = mantella240::plugin::evaluate_loaded(REX::FModule::GetExecutingModule().GetBaseAddress(), addrlib,
+				[](const std::string& m) { REX::INFO("{}", m); });
 		}
+		if (!ok) {
+			REX::CRITICAL("1.11.240 guard failed: engine-touching natives stay disabled");
+			}
+	}
 
 
 	F4SE::GetMessagingInterface()->RegisterListener(MessageHandler);
 
 	const auto papyrus = F4SE::GetPapyrusInterface();
 	if (!papyrus || !papyrus->Register(RegisterFunctions)) {
-		logger::critical("Failed to register Papyrus functions!");
+		REX::CRITICAL("Failed to register Papyrus functions!");
 	} else {
-		logger::info("Registered Papyrus functions.");
+		REX::INFO("Registered Papyrus functions.");
 	}
-	logger::info("{} v{}", Version::PROJECT, Version::NAME);
+	REX::INFO("{} v{}", Version::PROJECT, Version::NAME);
 
 	return true;
 	}
@@ -381,7 +362,10 @@ F4SE_EXPORT constinit auto F4SEPlugin_Version = []() noexcept {
 	// ignoring the list below (PluginManager::CheckPluginCompatibility). Only 1.11.240 is guarded/verified.
 	data.IsLayoutDependent(false);
 	data.HasNoStructUse(false);
-	data.CompatibleVersions({ F4SE::RUNTIME_1_10_984, F4SE::RUNTIME_1_10_163, F4SE::RUNTIME_LATEST_VR, REL::Version(1, 11, 240, 0) });  // 1.11.240: guarded, see port240/
+	// kalli/port-240: ONLY 1.11.240. The libxse build has no pre-NG/NG/VR relocations (upstream's VariantOffset /
+	// RelocationID paths are gone) and the guard verifies only 1.11.240, so listing other runtimes would be a
+	// false claim. Official upstream builds remain the choice for other runtimes.
+	data.CompatibleVersions({ REL::Version(1, 11, 240, 0) });
 
 	return data;
 	}();

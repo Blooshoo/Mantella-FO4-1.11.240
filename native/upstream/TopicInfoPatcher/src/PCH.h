@@ -5,17 +5,12 @@
 #include "RE/Fallout.h"
 
 #define NDEBUG
-
-#ifdef NDEBUG
-#	include <spdlog/sinks/basic_file_sink.h>
-#else
-#	include <spdlog/sinks/msvc_sink.h>
-#endif
 #pragma warning(pop)
 
 #define DLLEXPORT __declspec(dllexport)
 
-namespace logger = F4SE::log;
+// kalli/port-240: libxse/commonlibf4 7c8c6f8 has no F4SE::log; logging is REX::INFO/WARN/ERROR/CRITICAL,
+// initialised by F4SE::Init (main.cpp kInitInfo). spdlog is libxse's own dependency, not used directly.
 
 using namespace std::literals;
 

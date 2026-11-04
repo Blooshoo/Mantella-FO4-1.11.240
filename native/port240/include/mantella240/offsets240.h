@@ -90,6 +90,24 @@ inline constexpr std::array kOffsets240 = {
 		"upstream VariantOffset(0xAB60,0x24C240,0); use CommonLib handle API after review" },
 };
 
+// Compile-time lookups for plugin tripwires. TopicInfoPatcher is compiled WITHOUT any engine call whose
+// 1.11.240 target is not established (no guessed relocations); next to each such omission the plugin
+// static_asserts offset_known(name) && !offset_verified(name). Upgrading an offset to Verified here then
+// fails the plugin build until the reviewed relocation is added there. offset_known stops a misspelt
+// name from making the tripwire vacuous.
+[[nodiscard]] constexpr bool offset_known(std::string_view name) {
+	for (const auto& o : kOffsets240) if (o.name == name) return true;
+	return false;
+}
+[[nodiscard]] constexpr bool offset_verified(std::string_view name) {
+	for (const auto& o : kOffsets240) if (o.name == name) return o.status == Status::Verified;
+	return false;
+}
+[[nodiscard]] constexpr std::uint64_t offset_id(std::string_view name) {
+	for (const auto& o : kOffsets240) if (o.name == name) return o.id;
+	return 0;
+}
+
 // Natives exported to Papyrus (TopicInfoPatcher.psc API is unchanged from upstream, so the
 // official Mantella TopicInfoPatcher.pex keeps matching). Each native lists the offsets it needs.
 struct NativeSpec {
