@@ -40,7 +40,8 @@ enum class PatchResult : int {
 	NotMantella = -3,  // response is neither the placeholder nor what this plugin assigned to it
 	Disabled = -4,     // guard disabled the native
 	BadRecord = -5,    // topic/topic info/response pointers missing or more than one topic info
-	RetentionFull = -6,  // N02 retention cap reached: patching stops for this game session (fails closed)
+	RetentionFull = -6,  // N02 retention unavailable: cap reached or sealed (stops for this game session),
+	                     // or bookkeeping could not be reserved before publication (nothing changed)
 };
 
 // String lifetime vs. engine readers (Sol re-review N02; supersedes the 4096-entry FIFO).
@@ -67,6 +68,13 @@ enum class PatchResult : int {
 // kMaxRetainedEntries distinct entries (each <= 150 bytes of text + pool header) for the process
 // lifetime; at the cap patching fails closed (RetentionFull) instead of releasing anything.
 //
+// Allocation (re-review M01): every allocation of a patch happens BEFORE publication - the record of
+// the new text, a spare set node and the bucket reservation for the displaced entry - so a failure
+// there leaves the response and the state unchanged (RetentionFull, retry possible). After the
+// exchange nothing allocates. Should recording the displaced entry still fail, its reference is kept
+// (never released), counted against the cap as `unrecorded`, and the state is SEALED: every later
+// patch is refused, so the cap can never be bypassed.
+//
 // NOT proven here (engine side, runtime acceptance): that the engine itself never writes the
 // response slot concurrently (e.g. a form reload), that readers load the slot with a single aligned
 // 8-byte load (x64 codegen; formally a data race in C++ terms), and the BGSLocalizedString layout
@@ -88,26 +96,64 @@ public:
 		if (assigned_.size() >= kMaxTracked && !assigned_.contains(key)) assigned_.clear();  // bounded; fails closed (-3)
 		assigned_[key] = std::string(text);
 	}
-	// Retention of displaced entries (protocol step 3). Identity = entry address.
-	[[nodiscard]] bool retention_room_locked() const { return retained_.size() < retain_cap_; }
-	// Takes over ONE reference on `entry`. Returns true when a reference to it was already owned:
-	// the caller must then release the new one (the owned one keeps the count above zero).
-	// On allocation failure the reference is kept unrecorded (a leak is safe, a release is not).
+	// Retention of displaced entries (protocol step 3). Identity = entry address. Everything that is
+	// owned counts against the cap, recorded (retained_) or not (unrecorded_).
+	[[nodiscard]] bool retention_room_locked() const {
+		return !sealed_ && retained_.size() + unrecorded_ < retain_cap_;
+	}
+	// Before publication: makes the later adopt_locked allocation-free (a spare node for the set and
+	// buckets for one more element). False on allocation failure; nothing observable changed.
+	[[nodiscard]] bool prepare_locked() noexcept {
+		try {
+			if (spare_.empty()) spare_ = retained_.extract(retained_.insert(&kSpareTag).first);
+			retained_.reserve(retained_.size() + 1);
+			return true;
+		} catch (...) {
+			return false;
+		}
+	}
+	// After publication; never allocates, never throws. Takes over ONE reference on `entry`. Returns
+	// true when a reference to it was already owned: the caller must then release the new one (the
+	// owned one keeps the count above zero). If the reference cannot be recorded (no spare node - a
+	// prepare_locked contract breach - or an unexpected insert failure) it is kept, counted and the
+	// state is sealed: a leak is safe, a release is not, and the cap must still hold.
 	[[nodiscard]] bool adopt_locked(const void* entry) noexcept {
 		if (!entry) return false;
-		try { return !retained_.insert(entry).second; } catch (...) { return false; }
+		if (retained_.contains(entry)) return true;
+		if (!spare_.empty()) {
+			spare_.value() = entry;
+			try {
+				auto res = retained_.insert(std::move(spare_));
+				if (res.inserted) return false;
+				spare_ = std::move(res.node);  // unreachable (contains() checked); keep the node
+				return true;
+			} catch (...) {
+				// fall through: unrecordable
+			}
+		}
+		++unrecorded_;
+		sealed_ = true;
+		return false;
 	}
 	[[nodiscard]] bool retains(const void* entry) const { std::lock_guard lk(mu_); return retained_.contains(entry); }
 	[[nodiscard]] std::size_t retained() const { std::lock_guard lk(mu_); return retained_.size(); }
+	[[nodiscard]] std::size_t unrecorded() const { std::lock_guard lk(mu_); return unrecorded_; }
+	[[nodiscard]] bool sealed() const { std::lock_guard lk(mu_); return sealed_; }
 	explicit TopicPatchState(std::size_t retain_cap = kMaxRetainedEntries) : retain_cap_(retain_cap ? retain_cap : 1) {}
 	[[nodiscard]] std::unique_lock<std::mutex> lock() const { return std::unique_lock(mu_); }
 	[[nodiscard]] std::size_t tracked() const { std::lock_guard lk(mu_); return assigned_.size(); }
 
 private:
+	friend struct TopicPatchStateTestAccess;  // tests only: fault injection after publication
+	using RetainedSet = std::unordered_set<const void*>;
 	static constexpr std::size_t kMaxTracked = 4096;  // Mantella.esp has a few hundred topic infos
+	static constexpr char kSpareTag = 0;              // placeholder key while creating the spare node
 	mutable std::mutex mu_;
 	std::unordered_map<const void*, std::string> assigned_;
-	std::unordered_set<const void*> retained_;  // entries we own one reference on, never released
+	RetainedSet retained_;              // entries we own one reference on, never released
+	RetainedSet::node_type spare_;      // preallocated node for the next adopt_locked
+	std::size_t unrecorded_ = 0;        // owned references that could not be recorded (sealed_)
+	bool sealed_ = false;
 	std::size_t retain_cap_;
 };
 
@@ -115,7 +161,7 @@ private:
 // called with the state lock held:
 //   text(resp)             -> std::string_view of the response's current text
 //   acquire(text)          -> Entry* carrying ONE new reference for `text` (nullptr for ""); may
-//                             throw (nothing has been changed yet)
+//                             throw (nothing is published yet)
 //   exchange(resp, entry)  -> publishes `entry` in the response slot with ONE atomic pointer
 //                             exchange and returns the previous Entry* (and the reference the
 //                             response held on it); noexcept
@@ -127,10 +173,19 @@ PatchResult patch_response(TopicPatchState& st, Resp* resp, std::string_view new
 	const PatchResult r = st.check_locked(resp, ops.text(resp), new_text);
 	if (r != PatchResult::Ok) return r;
 	if (!st.retention_room_locked()) return PatchResult::RetentionFull;  // before anything changes
-	auto* fresh = ops.acquire(new_text);
+	// ---- everything that can allocate or throw, before publication
+	if (!st.prepare_locked()) return PatchResult::RetentionFull;
+	decltype(ops.acquire(new_text)) fresh = nullptr;
+	try {
+		fresh = ops.acquire(new_text);
+		st.record_locked(resp, new_text);
+	} catch (...) {
+		if (fresh) ops.release(fresh);  // never published: this is the only reference
+		return PatchResult::RetentionFull;
+	}
+	// ---- publication; nothing below allocates or throws
 	auto* old = ops.exchange(resp, fresh);
 	if (st.adopt_locked(old)) ops.release(old);
-	st.record_locked(resp, new_text);
 	return PatchResult::Ok;
 }
 

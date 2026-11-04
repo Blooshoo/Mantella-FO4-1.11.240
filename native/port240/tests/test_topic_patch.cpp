@@ -13,6 +13,8 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
+#include <new>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -25,6 +27,32 @@ static int failures = 0;
 
 using namespace mantella240;
 
+// ------------------------------------------------------------------ deterministic allocation faults
+// Every operator new in this process is counted; when armed, exactly the n-th allocation from now
+// throws std::bad_alloc. Armed only on the main thread while no other test thread runs.
+static std::atomic<long> g_allocs{ 0 };
+static std::atomic<long> g_fail_countdown{ 0 };  // 0 = disarmed
+void* operator new(std::size_t n) {
+	g_allocs.fetch_add(1, std::memory_order_relaxed);
+	if (g_fail_countdown.load(std::memory_order_relaxed) > 0 && g_fail_countdown.fetch_sub(1) == 1) throw std::bad_alloc();
+	if (void* p = std::malloc(n ? n : 1)) return p;
+	throw std::bad_alloc();
+}
+// The replacement operator new above is malloc-based, so free() is the matching deallocation;
+// GCC's -Wmismatched-new-delete cannot see that for replaced global operators.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+#pragma GCC diagnostic pop
+
+namespace mantella240 {
+struct TopicPatchStateTestAccess {
+	// Simulates "the displaced entry cannot be recorded" after publication (re-review M01).
+	static void drop_spare(TopicPatchState& s) { s.spare_ = {}; }
+};
+}  // namespace mantella240
+
 struct Entry {
 	std::atomic<int> refs{ 0 };
 	std::string text;
@@ -33,14 +61,21 @@ struct Entry {
 class Pool {
 public:
 	~Pool() { for (auto& [k, e] : live_) delete e; }
-	// GetEntry: one new reference (nullptr for "", like an empty BSFixedString).
+	// GetEntry: one new reference (nullptr for "", like an empty BSFixedString). Strong exception
+	// guarantee, so allocation-fault runs leave the pool consistent.
 	Entry* acquire(std::string_view s) {
 		if (s.empty()) return nullptr;
+		std::string key(s);
 		std::lock_guard lk(mu_);
-		auto& e = live_[std::string(s)];
-		if (!e) { e = new Entry; e->text = std::string(s); }
-		e->refs.fetch_add(1, std::memory_order_relaxed);
-		return e;
+		auto it = live_.find(key);
+		if (it == live_.end()) {
+			auto fresh = std::make_unique<Entry>();
+			fresh->text = key;
+			it = live_.emplace(std::move(key), fresh.get()).first;
+			fresh.release();
+		}
+		it->second->refs.fetch_add(1, std::memory_order_relaxed);
+		return it->second;
 	}
 	// Entry::acquire on an entry the caller only has a pointer to (UAF if it was freed).
 	static void addref(Entry* e) { e->refs.fetch_add(1, std::memory_order_relaxed); }
@@ -60,6 +95,7 @@ public:
 	}
 	[[nodiscard]] bool alive(std::string_view s) { std::lock_guard lk(mu_); return live_.contains(std::string(s)); }
 	[[nodiscard]] long freed() const { return freed_.load(); }
+	[[nodiscard]] long total_refs() { std::lock_guard lk(mu_); long n = 0; for (auto& [k, e] : live_) n += e->refs.load(); return n; }
 
 private:
 	std::mutex mu_;
@@ -83,6 +119,21 @@ struct Ops {
 
 static PatchResult patch(TopicPatchState& st, Pool& pool, FakeResponse* r, std::string_view t) {
 	return patch_response(st, r, t, Ops{ pool });
+}
+
+// Ops that make recording of the displaced entry impossible after publication.
+struct UnrecordableOps : Ops {
+	TopicPatchState& st;
+	Entry* exchange(FakeResponse* r, Entry* e) const noexcept {
+		TopicPatchStateTestAccess::drop_spare(st);  // state lock is held by patch_response
+		return Ops::exchange(r, e);
+	}
+};
+
+// Ownership accounting for one response: every reference alive is the response's or the state's.
+static bool balanced(Pool& pool, const TopicPatchState& st, const FakeResponse& r) {
+	const long slot = r.slot.load() ? 1 : 0;
+	return pool.total_refs() == slot + static_cast<long>(st.retained() + st.unrecorded());
 }
 
 static void test_decision_logic() {
@@ -229,6 +280,123 @@ static void test_cap_and_dedupe() {
 	}
 }
 
+// Re-review M01 repro: recording the displaced entry fails after publication on every patch. Before
+// the fix: cap 2, 8 displacements, 0 tracked. Now the first unrecordable transfer is counted, its
+// reference kept, and the state sealed; nothing is ever released or freed.
+static void test_unrecordable_transfer_seals() {
+	Pool pool;
+	TopicPatchState st(2);
+	FakeResponse r(pool, kTopicPlaceholder);
+	int ok = 0, refused = 0;
+	for (int i = 0; i < 8; ++i) {
+		const auto res = patch_response(st, &r, "line " + std::to_string(i), UnrecordableOps{ { pool }, st });
+		ok += res == PatchResult::Ok;
+		refused += res == PatchResult::RetentionFull;
+	}
+	CHECK(ok == 1 && refused == 7);
+	CHECK(st.sealed());
+	CHECK(st.unrecorded() == 1 && st.retained() == 0);
+	CHECK(st.retained() + st.unrecorded() <= 2);       // the cap holds
+	CHECK(r.text() == "line 0");
+	CHECK(pool.refs(kTopicPlaceholder) == 1);          // displaced reference kept, not released
+	CHECK(pool.freed() == 0);
+	CHECK(balanced(pool, st, r));
+	CHECK(patch(st, pool, &r, "normal ops") == PatchResult::RetentionFull);  // sealed for good
+	pool.release(r.slot.exchange(nullptr));
+}
+
+// Re-review M01, reviewer's shape: arm an allocation failure AT publication on every patch. On 7d1dee0
+// this gave cap 2 -> 8 displacements, 0 tracked (and an escaping bad_alloc from the record step).
+// Now no allocation happens after publication at all, so the fault never fires and the cap holds.
+struct ArmAtExchange : Ops {
+	Entry* exchange(FakeResponse* r, Entry* e) const noexcept {
+		g_fail_countdown.store(1);  // the very next allocation would throw
+		return Ops::exchange(r, e);
+	}
+};
+static void test_no_allocation_after_publication() {
+	Pool pool;
+	TopicPatchState st(2);
+	FakeResponse r(pool, kTopicPlaceholder);
+	int ok = 0, refused = 0, fired = 0;
+	for (int i = 0; i < 8; ++i) {
+		const auto res = patch_response(st, &r, "line " + std::to_string(i) + " long enough to defeat small strings", ArmAtExchange{ { pool } });
+		fired += g_fail_countdown.exchange(0) == 0 && res == PatchResult::Ok;
+		ok += res == PatchResult::Ok;
+		refused += res == PatchResult::RetentionFull;
+	}
+	CHECK(fired == 0);                                  // nothing allocated after any publication
+	CHECK(ok == 2 && refused == 6);
+	CHECK(st.retained() == 2 && st.unrecorded() == 0 && !st.sealed());
+	CHECK(balanced(pool, st, r));
+	CHECK(pool.freed() == 0);
+	pool.release(r.slot.exchange(nullptr));
+}
+
+// Re-review M01: fail exactly the k-th allocation of one patch, for every k a patch performs, both on
+// the very first patch (spare node creation, placeholder displacement) and in steady state. Every
+// failure must happen before publication: response and accounting unchanged, retry possible, never
+// sealed, nothing freed, the cap and the reference balance hold throughout.
+static void test_allocation_fault_sweep() {
+	long steady = 0, first = 0;
+	{
+		Pool pool;
+		TopicPatchState st;
+		FakeResponse r(pool, kTopicPlaceholder);
+		long a = g_allocs.load();
+		CHECK(patch(st, pool, &r, "warm 0") == PatchResult::Ok);
+		first = g_allocs.load() - a;
+		a = g_allocs.load();
+		CHECK(patch(st, pool, &r, "warm 1 with a text long enough to defeat any small-string buffer") == PatchResult::Ok);
+		steady = g_allocs.load() - a;
+		pool.release(r.slot.exchange(nullptr));
+	}
+	CHECK(first > 0 && steady > 0);
+	int injected = 0;
+	for (int warm : { 0, 2 }) {
+		const long n = warm ? steady : first;
+		for (long k = 1; k <= n + 2; ++k) {
+			Pool pool;
+			TopicPatchState st(16);
+			FakeResponse r(pool, kTopicPlaceholder);
+			for (int i = 0; i < warm; ++i) CHECK(patch(st, pool, &r, "warm " + std::to_string(i) + " with a text long enough to defeat any small-string buffer") == PatchResult::Ok);
+			const std::string before(r.text());
+			const std::size_t kept = st.retained();
+			const std::string line = "faulted line " + std::to_string(k) + " with a text long enough to defeat any small-string buffer";
+			g_fail_countdown.store(k);
+			const auto res = patch(st, pool, &r, line);
+			const bool fired = g_fail_countdown.exchange(0) == 0;
+			injected += fired;
+			if (fired) {
+				CHECK(res == PatchResult::RetentionFull);
+				CHECK(r.text() == before);                 // nothing published
+				CHECK(st.retained() == kept);
+				CHECK(!pool.alive(line));                  // fresh entry not leaked
+			} else {
+				CHECK(res == PatchResult::Ok);
+			}
+			CHECK(!st.sealed() && st.unrecorded() == 0);
+			CHECK(balanced(pool, st, r));
+			// the state keeps working afterwards, including a retry of the same response
+			int displaced = static_cast<int>(st.retained());
+			for (int i = 0; i < 8; ++i) {
+				if (patch(st, pool, &r, "after " + std::to_string(i)) == PatchResult::Ok) ++displaced;
+				CHECK(balanced(pool, st, r));
+			}
+			CHECK(st.retained() == static_cast<std::size_t>(displaced));
+			CHECK(st.retained() <= 16);
+			// The only entry that may ever be freed is the faulted patch's own, never-published one
+			// (acquired, then released when recording failed). Everything ever published is alive.
+			CHECK(pool.freed() <= (fired ? 1 : 0));
+			CHECK(pool.alive(kTopicPlaceholder) && pool.alive(before));
+			for (int i = 0; i < warm; ++i) CHECK(pool.alive("warm " + std::to_string(i) + " with a text long enough to defeat any small-string buffer"));
+			for (int i = 0; i < 8; ++i) CHECK(pool.alive("after " + std::to_string(i)));
+			pool.release(r.slot.exchange(nullptr));
+		}
+	}
+	CHECK(injected >= 3);  // the sweep really hit allocations inside patch_response
+}
+
 // Writer serialization (re-review N02 first half): concurrent VM-thread patches of the same and
 // different responses see a consistent (placeholder or own-last) state every time.
 static void test_concurrent_writers() {
@@ -256,6 +424,9 @@ int main() {
 	test_raw_reader_outlives_any_window();
 	test_concurrent_engine_readers();
 	test_cap_and_dedupe();
+	test_unrecordable_transfer_seals();
+	test_no_allocation_after_publication();
+	test_allocation_fault_sweep();
 	test_concurrent_writers();
 	std::printf("test_topic_patch: %d failures\n", failures);
 	return failures ? 1 : 0;

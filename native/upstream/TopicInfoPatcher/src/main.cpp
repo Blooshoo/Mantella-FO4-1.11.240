@@ -224,7 +224,12 @@ int PatchTopicInfo(std::monostate, RE::TESTopic *topic , std::string new_text) {
 
 	const PatchResult r = mantella240::patch_response(g_topicPatch, response, new_text, topic_slot::Ops{});
 	if (r == PatchResult::TooLong) logger::warn("Replacement too long! ({:d})", new_text.length());
-	else if (r == PatchResult::RetentionFull) logger::critical("PatchTopicInfo: string retention cap reached; refusing further patches this session (restart the game)");
+	else if (r == PatchResult::RetentionFull) {
+		if (g_topicPatch.sealed() || g_topicPatch.retained() + g_topicPatch.unrecorded() >= mantella240::kMaxRetainedEntries)
+			logger::critical("PatchTopicInfo: string retention exhausted; refusing further patches this session (restart the game)");
+		else
+			logger::error("PatchTopicInfo: could not reserve string bookkeeping (allocation failure); nothing was changed");
+	}
 	else if (r == PatchResult::NotMantella) logger::warn("TopicInfo text is neither the Mantella placeholder nor our last text for this response");
 	return static_cast<int>(r);
 	}
