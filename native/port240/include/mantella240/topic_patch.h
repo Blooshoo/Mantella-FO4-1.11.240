@@ -84,6 +84,8 @@ inline constexpr std::size_t kMaxRetainedEntries = 65536;
 
 class TopicPatchState {
 public:
+	static constexpr std::size_t kMaxTracked = 4096;  // responses tracked; Mantella.esp has a few hundred topic infos
+
 	// `current` = the response's current text; `key` identifies the response object.
 	[[nodiscard]] PatchResult check_locked(const void* key, std::string_view current, std::string_view new_text) const {
 		if (new_text.size() > kMaxSubtitleBytes) return PatchResult::TooLong;
@@ -92,9 +94,25 @@ public:
 		if (it != assigned_.end() && it->second == current) return PatchResult::Ok;
 		return PatchResult::NotMantella;
 	}
+	// Strong exception guarantee (re-review M02): everything that allocates is built aside first and
+	// committed with non-throwing operations, so on failure the prior tracking is fully preserved and
+	// every response patched so far stays patchable.
+	//   * known response: copy the text, then swap it in;
+	//   * new response below kMaxTracked: single-element emplace (no effect if it throws);
+	//   * new response at kMaxTracked (rollover, bounded; earlier responses then fail closed with -3):
+	//     a replacement map holding only the new record is built and swapped in; the old map is
+	//     destroyed only after the commit.
 	void record_locked(const void* key, std::string_view text) {
-		if (assigned_.size() >= kMaxTracked && !assigned_.contains(key)) assigned_.clear();  // bounded; fails closed (-3)
-		assigned_[key] = std::string(text);
+		std::string copy(text);
+		if (auto it = assigned_.find(key); it != assigned_.end()) {
+			it->second.swap(copy);
+		} else if (assigned_.size() < kMaxTracked) {
+			assigned_.emplace(key, std::move(copy));
+		} else {
+			Assigned fresh;
+			fresh.emplace(key, std::move(copy));
+			assigned_.swap(fresh);
+		}
 	}
 	// Retention of displaced entries (protocol step 3). Identity = entry address. Everything that is
 	// owned counts against the cap, recorded (retained_) or not (unrecorded_).
@@ -146,10 +164,10 @@ public:
 private:
 	friend struct TopicPatchStateTestAccess;  // tests only: fault injection after publication
 	using RetainedSet = std::unordered_set<const void*>;
-	static constexpr std::size_t kMaxTracked = 4096;  // Mantella.esp has a few hundred topic infos
 	static constexpr char kSpareTag = 0;              // placeholder key while creating the spare node
+	using Assigned = std::unordered_map<const void*, std::string>;
 	mutable std::mutex mu_;
-	std::unordered_map<const void*, std::string> assigned_;
+	Assigned assigned_;
 	RetainedSet retained_;              // entries we own one reference on, never released
 	RetainedSet::node_type spare_;      // preallocated node for the next adopt_locked
 	std::size_t unrecorded_ = 0;        // owned references that could not be recorded (sealed_)

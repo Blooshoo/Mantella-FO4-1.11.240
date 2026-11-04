@@ -397,6 +397,58 @@ static void test_allocation_fault_sweep() {
 	CHECK(injected >= 3);  // the sweep really hit allocations inside patch_response
 }
 
+// Re-review M02: the bounded rollover of response tracking (kMaxTracked) used to clear() the map
+// BEFORE allocating the new record; an allocation failure then wiped every record and made all
+// previously patched responses fail closed (-3). Fill tracking to exactly kMaxTracked, then patch one
+// more response with exactly the k-th allocation failing, for every k up to the first success. Each
+// failure must preserve all tracking and leave existing responses patchable; the un-faulted rollover
+// then behaves as documented.
+static void test_rollover_fault_preserves_tracking() {
+	constexpr std::size_t N = TopicPatchState::kMaxTracked;
+	const std::string pad = " with a text long enough to defeat any small-string buffer";
+	Pool pool;
+	TopicPatchState st;
+	std::vector<std::unique_ptr<FakeResponse>> rs;
+	for (std::size_t i = 0; i < N; ++i) {
+		rs.push_back(std::make_unique<FakeResponse>(pool, kTopicPlaceholder));
+		CHECK(patch(st, pool, rs.back().get(), "tracked " + std::to_string(i) + pad) == PatchResult::Ok);
+	}
+	CHECK(st.tracked() == N);
+	FakeResponse extra(pool, kTopicPlaceholder);
+	const std::string line = "rollover line" + pad;
+	int failed = 0;
+	bool rolled = false;
+	for (long k = 1; k <= 256 && !rolled; ++k) {
+		g_fail_countdown.store(k);
+		const auto res = patch(st, pool, &extra, line);
+		const bool fired = g_fail_countdown.exchange(0) == 0;
+		if (!fired) {
+			CHECK(res == PatchResult::Ok);
+			rolled = true;
+			break;
+		}
+		++failed;
+		CHECK(res == PatchResult::RetentionFull);
+		CHECK(st.tracked() == N);                          // prior tracking preserved
+		CHECK(extra.text() == kTopicPlaceholder);          // nothing published
+		CHECK(!pool.alive(line));
+		CHECK(!st.sealed());
+		for (std::size_t j : { std::size_t{ 0 }, N / 2, N - 1 })  // existing responses stay patchable
+			CHECK(patch(st, pool, rs[j].get(), "repatched " + std::to_string(j) + " at fault " + std::to_string(k) + pad) == PatchResult::Ok);
+		CHECK(st.tracked() == N);
+	}
+	CHECK(rolled);
+	CHECK(failed >= 3);                                    // pool, record and rollover allocations hit
+	// The rollover itself is bounded and fails closed, as documented: only the new record survives.
+	CHECK(st.tracked() == 1);
+	CHECK(extra.text() == line);
+	CHECK(patch(st, pool, rs[0].get(), "after rollover" + pad) == PatchResult::NotMantella);
+	CHECK(patch(st, pool, &extra, "extra again" + pad) == PatchResult::Ok);
+	CHECK(pool.freed() <= failed);                         // only never-published entries were freed
+	for (auto& r : rs) pool.release(r->slot.exchange(nullptr));
+	pool.release(extra.slot.exchange(nullptr));
+}
+
 // Writer serialization (re-review N02 first half): concurrent VM-thread patches of the same and
 // different responses see a consistent (placeholder or own-last) state every time.
 static void test_concurrent_writers() {
@@ -427,6 +479,7 @@ int main() {
 	test_unrecordable_transfer_seals();
 	test_no_allocation_after_publication();
 	test_allocation_fault_sweep();
+	test_rollover_fault_preserves_tracking();
 	test_concurrent_writers();
 	std::printf("test_topic_patch: %d failures\n", failures);
 	return failures ? 1 : 0;
