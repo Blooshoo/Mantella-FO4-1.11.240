@@ -63,7 +63,7 @@ extern "C" DLLEXPORT bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a
 // Mantella temporarily modifies some settings to mute some NPC commentary
 // During player conversation
 
-RE::GameSettingCollection *GameSettings;
+RE::GameSettingCollection *GameSettings = nullptr;  // set only through acquire_game_settings (G01)
 
 std::map<std::string, float> SettingsFloat;
 std::map<std::string, int> SettingsInt;
@@ -131,7 +131,11 @@ void MessageHandler(F4SE::MessagingInterface::Message* a_msg) {
 
 	case F4SE::MessagingInterface::kGameDataReady: 	{
 		REX::INFO("GameDataReady");
-		GameSettings = RE::GameSettingCollection::GetSingleton();
+		// kalli/port-240 (re-review G01): this listener is registered even when the guard failed (degraded
+		// load keeps the pure helper bound), so the singleton lookup - an engine read - is itself gated on
+		// the validated offset. Refused: nothing touches the engine and GameSettings stays nullptr.
+		GameSettings = mantella240::plugin::acquire_game_settings([] { return RE::GameSettingCollection::GetSingleton(); });
+		if (!GameSettings) REX::WARN("GameDataReady: game settings unavailable (guard did not validate {})", mantella240::plugin::kGameSettingsSingleton);
 		}
 		break;
 	case F4SE::MessagingInterface::kPostLoadGame:
@@ -265,6 +269,10 @@ std::string StringRemoveWhiteSpace(std::monostate, std::string str) {
 // kalli/port-240: upstream REL::RelocationID(919230, 2229158) = (pre-NG ID, NG/AE ID). The 1.11.240 database
 // resolves 2229158 to executable code (offsets240.h "TakeScreenshot", pattern-checked by the guard), but the
 // (filename, type, sstype) ABI is unproven, so the guard never enables TakeScreenShot (LocatedAbiUnproven).
+// Re-review G02: production tripwire, not only test_guard.cpp. Promoting the catalog entry to Verified is not
+// an ABI proof; this build must fail until TakeScreenShot_internal gets a reviewed 1.11.240 ABI migration.
+static_assert(mantella240::offset_known("TakeScreenshot") && !mantella240::offset_verified("TakeScreenshot"),
+	"offsets240.h marks TakeScreenshot Verified: review and migrate the (filename, type, sstype) ABI of TakeScreenShot_internal for 1.11.240 first");
 void TakeScreenShot_internal(char*filename, int filetype, int sstype) {
 	static_assert(mantella240::offset_id("TakeScreenshot") == 2229158);
 	using func_t = decltype(TakeScreenShot_internal);

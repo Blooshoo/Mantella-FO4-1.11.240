@@ -12,7 +12,9 @@ CPP
 g++ -std=c++20 -O1 -Wall -Wextra -I"$here/include" "$here/tools/verify240.cpp" -o "$out/verify240"
 g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I"$here/include" "$here/tests/test_guard.cpp" -o "$out/test_guard_asan"
 g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=address,undefined -fno-sanitize-recover=all -I"$here/include" "$here/tests/test_topic_patch.cpp" -o "$out/test_topic_patch"
+g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I"$here/include" -I"$here/plugin" "$here/tests/test_plugin_gates.cpp" -o "$out/test_plugin_gates"
 "$out/glue"
+"$out/test_plugin_gates"
 "$out/test_topic_patch"
 g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=thread -I"$here/include" "$here/tests/test_topic_patch.cpp" -o "$out/test_topic_patch_tsan"
 tsan_run=("$out/test_topic_patch_tsan")

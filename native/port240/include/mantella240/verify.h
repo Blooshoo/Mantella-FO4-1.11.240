@@ -84,9 +84,10 @@ inline OffsetResult check_offset(const OffsetSpec& spec, const AddressLibrary& l
 	return r;
 }
 
-inline Report evaluate(const AddressLibrary& lib, const PeImage& pe, bool loaded_image) {
-	Report rep;
-	for (const auto& spec : kOffsets240) rep.offsets.push_back(check_offset(spec, lib, pe, loaded_image));
+// Derives every native's enabled flag from the offsets already in `rep` (split out of evaluate() so the
+// plugin-gate tests can build guard states without duplicating this rule).
+inline void evaluate_natives(Report& rep) {
+	rep.natives.clear();
 	for (const auto& n : kNatives240) {
 		NativeResult nr;
 		nr.spec = &n;
@@ -102,6 +103,12 @@ inline Report evaluate(const AddressLibrary& lib, const PeImage& pe, bool loaded
 		if (nr.enabled) nr.detail = "all dependencies verified";
 		rep.natives.push_back(std::move(nr));
 	}
+}
+
+inline Report evaluate(const AddressLibrary& lib, const PeImage& pe, bool loaded_image) {
+	Report rep;
+	for (const auto& spec : kOffsets240) rep.offsets.push_back(check_offset(spec, lib, pe, loaded_image));
+	evaluate_natives(rep);
 	return rep;
 }
 

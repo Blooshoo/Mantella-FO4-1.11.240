@@ -52,4 +52,27 @@ inline bool allowed(std::string_view native) {
 	return st.evaluated && st.runtime_is_240 && st.core_ok && st.report.native_enabled(native);
 }
 
+// An engine OFFSET may be used outside a native (e.g. by a messaging listener) only under the same
+// conditions, for that specific offset: guard ran on 1.11.240, every Verified core offset passed, and
+// this offset is Verified and passed against the loaded image.
+inline bool offset_allowed(std::string_view offset) {
+	const auto& st = state();
+	if (!(st.evaluated && st.runtime_is_240 && st.core_ok)) return false;
+	const OffsetResult* o = st.report.find(offset);
+	return o && o->usable && o->spec->status == Status::Verified;
+}
+
+// TopicInfoPatcher's GameDataReady decision (re-review G01), called verbatim by its MessageHandler with the
+// real RE::GameSettingCollection::GetSingleton accessor and by tests/test_plugin_gates.cpp with a counting
+// fake. The accessor - an engine read - runs only if the singleton's offset is allowed; otherwise nothing
+// touches the engine and nullptr is returned, which the caller stores, so a stale pointer can never stay
+// usable after a failed or reset guard.
+inline constexpr std::string_view kGameSettingsSingleton = "GameSettingCollection::Singleton";
+static_assert(offset_known(kGameSettingsSingleton) && offset_verified(kGameSettingsSingleton));
+template <class Acquire>
+[[nodiscard]] auto acquire_game_settings(Acquire&& acquire) -> decltype(acquire()) {
+	if (!offset_allowed(kGameSettingsSingleton)) return nullptr;
+	return acquire();
+}
+
 }  // namespace mantella240::plugin
