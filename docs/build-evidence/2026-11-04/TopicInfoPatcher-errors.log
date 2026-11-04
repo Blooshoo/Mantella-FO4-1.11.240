@@ -1,0 +1,106 @@
+TopicInfoPatcher Windows-target compile, source 2d82a3b2f9efdd5e6ce0738b9cb5d21b765e5876
+Exit 1; all 32 compiler errors below. SDK/dependency warning-only prelude and vendor-source excerpts omitted; final compiler summary retained. No error diagnostic omitted. <BUILD_ROOT> is a portable placeholder.
+
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/PCH.h(18,26): error: expected namespace name
+   18 | namespace logger = F4SE::log;
+      |                    ~~~~~~^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(16,2): error: use of undeclared identifier 'logger'
+   16 |         logger::warn("{} disabled on 1.11.240 (see TopicInfoPatcher.log guard lines)", native);
+      |         ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(21,49): error: use of undeclared identifier 'logger'
+   21 |         std::optional<std::filesystem::path> logpath = logger::log_directory();
+      |                                                        ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(24,14): error: use of undeclared identifier 'fmt'
+   24 |         *logpath /= fmt::format(FMT_STRING("{}.log"), plugin_name);
+      |                     ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(24,26): error: use of undeclared identifier 'FMT_STRING'
+   24 |         *logpath /= fmt::format(FMT_STRING("{}.log"), plugin_name);
+      |                                 ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(32,10): error: no member named 'set_default_logger' in namespace 'spdlog'
+   32 |         spdlog::set_default_logger(std::move(log));
+      |         ~~~~~~~~^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(33,10): error: no member named 'set_pattern' in namespace 'spdlog'
+   33 |         spdlog::set_pattern("[%T.%e] [%=5t] [%L] %v"s);
+      |         ~~~~~~~~^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(35,2): error: use of undeclared identifier 'logger'
+   35 |         logger::info("{} v{}", Version::PROJECT, Version::NAME);
+      |         ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(46,3): error: use of undeclared identifier 'logger'
+   46 |                 logger::critical("loaded in editor");
+      |                 ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(133,3): error: use of undeclared identifier 'logger'
+  133 |                 logger::info("GameDataReady");
+      |                 ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(139,13): error: no member named 'Module' in namespace 'REL'
+  139 |                 if (!REL::Module::IsVR() && gate("GetLastActorCoords")) {
+      |                      ~~~~~^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(218,3): error: use of undeclared identifier 'logger'
+  218 |                 logger::warn("Topic {:X}: not a single-response Mantella topic", topic->formID);
+      |                 ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(223,2): error: use of undeclared identifier 'logger'
+  223 |         logger::info("Topic {:X} TopicInfo {:X} Text: {}", topic->formID, tpInfo->formID, new_text);
+      |         ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(226,33): error: use of undeclared identifier 'logger'
+  226 |         if (r == PatchResult::TooLong) logger::warn("Replacement too long! ({:d})", new_text.length());
+      |                                        ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(229,4): error: use of undeclared identifier 'logger'
+  229 |                         logger::critical("PatchTopicInfo: string retention exhausted; refusing further patches this session (restart the game)");
+      |                         ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(231,4): error: use of undeclared identifier 'logger'
+  231 |                         logger::error("PatchTopicInfo: could not reserve string bookkeeping (allocation failure); nothing was changed");
+      |                         ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(233,42): error: use of undeclared identifier 'logger'
+  233 |         else if (r == PatchResult::NotMantella) logger::warn("TopicInfo text is neither the Mantella placeholder nor our last text for this response");
+      |                                                 ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(255,44): error: no member named 'VariantOffset' in namespace 'REL'
+  255 |         static REL::Relocation<func_t> func{ REL::VariantOffset(0x0621710, 0, 0x60C060)};       // Pre-NG, NG, VR
+      |                                              ~~~~~^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(257,2): error: use of undeclared identifier 'logger'
+  257 |         logger::info("Info: {:p} Name; {:p}", (void*)Info, (void*)name);
+      |         ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(269,2): error: use of undeclared identifier 'logger'
+  269 |         logger::info("SetOverrideFileName Info: {:p} name: {}", (void*) this_p, name.data());
+      |         ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(291,44): error: no member named 'RelocationID' in namespace 'REL'
+  291 |         static REL::Relocation<func_t> func{ REL::RelocationID(919230, 2229158) };
+      |                                              ~~~~~^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(326,8): warning: 'Init' is deprecated: Use F4SE::Init(..., {}) instead [-Wdeprecated-declarations]
+  326 |         F4SE::Init(a_f4se,false);
+      |               ^
+<BUILD_ROOT>/deps/commonlibf4/include/F4SE/API.h(62,4): note: 'Init' has been explicitly marked deprecated here
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(330,11): error: no member named 'Module' in namespace 'REL'
+  330 |         if (REL::Module::IsVR()) {
+      |             ~~~~~^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(331,3): error: use of undeclared identifier 'logger'
+  331 |                 logger::info("is VR");
+      |                 ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(333,3): error: use of undeclared identifier 'logger'
+  333 |                 logger::info("F4SE Version is: {:d}.{:d}.{:d}.{:d}", F4SEver.major(), F4SEver.minor(), F4SEver.build(), F4SEver.patch());
+      |                 ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(340,3): error: use of undeclared identifier 'logger'
+  340 |                 logger::info("Not VR");
+      |                 ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(350,55): error: no member named 'Module' in namespace 'REL'
+  350 |                 bool ok = mantella240::plugin::evaluate_loaded(REL::Module::get().base(), addrlib,
+      |                                                                ~~~~~^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(351,31): error: use of undeclared identifier 'logger'
+  351 |                         [](const std::string& m) { logger::info("{}", m); });
+      |                                                    ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(353,4): error: use of undeclared identifier 'logger'
+  353 |                         logger::critical("1.11.240 guard failed: engine-touching natives stay disabled");
+      |                         ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(362,3): error: use of undeclared identifier 'logger'
+  362 |                 logger::critical("Failed to register Papyrus functions!");
+      |                 ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(364,3): error: use of undeclared identifier 'logger'
+  364 |                 logger::info("Registered Papyrus functions.");
+      |                 ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(366,2): error: use of undeclared identifier 'logger'
+  366 |         logger::info("{} v{}", Version::PROJECT, Version::NAME);
+      |         ^
+<BUILD_ROOT>/native/upstream/TopicInfoPatcher/src/main.cpp(384,82): error: no member named 'RUNTIME_LATEST_VR' in namespace 'F4SE'; did you mean 'RUNTIME_LATEST'?
+  384 |         data.CompatibleVersions({ F4SE::RUNTIME_1_10_984, F4SE::RUNTIME_1_10_163, F4SE::RUNTIME_LATEST_VR, REL::Version(1, 11, 240, 0) });  // 1.11.240: guarded, see port240/
+      |                                                                                   ~~~~~~^~~~~~~~~~~~~~~~~
+      |                                                                                         RUNTIME_LATEST
+<BUILD_ROOT>/deps/commonlibf4/include/F4SE/Version.h(64,24): note: 'RUNTIME_LATEST' declared here
+119 warnings and 32 errors generated.

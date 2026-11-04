@@ -20,6 +20,12 @@
 - **Explicitly still unresolved:** engine-reader safety beyond this plugin's own releases (concurrent engine writes to the response slot, single aligned pointer loads, real 1.11.240 layout; runtime acceptance needed), and durable-character continuity in the OpenClaw adapter (`session_scope: "character"` cannot rotate its key, so a recap after an ambiguous failure can repeat a turn in that durable transcript; busy answers are not retried there).
 - Items 5-6 untouched.
 
+## Actual Windows-target build evidence — 2026-11-04
+
+**Read [the sanitized build report and reproduction steps](docs/build-evidence/2026-11-04/README.md) and [all 32 TopicInfoPatcher compiler errors](docs/build-evidence/2026-11-04/TopicInfoPatcher-errors.log) before item 5.** Exact tested source is 2d82a3b2f9efdd5e6ce0738b9cb5d21b765e5876. F4SE_HTTP now has an actual Linux-built Windows x64 DLL (metadata/hash only in Git); TopicInfoPatcher still fails real-header compilation because old logging/module/relocation/VR APIs need migration. This is not fixed by include-path changes. See [decoded HTTP metadata/imports](docs/build-evidence/2026-11-04/HTTP-artifact-metadata.json) and the report’s bounded migration checklist.
+
+Keep all topic_slot size/alignment assertions intact, preserve M01/M02 ownership/accounting/transactionality, and do not guess relocation mappings, broaden runtime declarations or stub out natives. Independent fresh-state M02 sweeps passed; engine-reader/layout/lifetime and durable-character continuity remain unresolved. No installation, auto-deploy, launch or live API work is authorized by this evidence handoff. Keep COPY_BUILD=OFF and Fallout4Path, MO2_MODS_FOLDER, XSE_FO4_MODS_PATH, XSE_FO4_GAME_PATH unset.
+
 ## Reproducible host-portable commands
 From repository root, Linux with g++ 13+, Python 3.11, pthread, Python pytest dependencies:
 
@@ -42,7 +48,7 @@ Backend focused tests, from backend/ (venv path is caller-chosen):
 
 Use network isolation after dependencies are installed (on Linux, unshare -rn when permitted). Upstream requirements contain loose versions; TESTED-PYTHON-ENV.txt is an exact installed distribution inventory from publication verification, not a new fully resolved portable lock. Prefer those versions for reproduction; platform-specific packages may require adjustments. Do not run all tests against live user configuration or real services. Some optional audio/STT dependencies need system libraries and are not needed by all targeted tests.
 
-## Native Windows build recipe (not executed or certified)
+## Original Windows build recipe (historical; see actual build evidence above)
 Use legally provisioned MSVC 19.38+ or clang-cl 19.1.1 + LLD and matching Windows SDK/CRT; XMake >=3.0.0. SDK/CRT are not bundled. Owner had subsequently approved Microsoft terms in a separate continuation; this publication does not download packages, accept terms, or imply toolchain completion. Last recorded toolchain checkpoint had local LLVM 19.1.1 but SDK/CRT/XMake missing; fresh build host must inspect prerequisites.
 
 In a disposable copy of native/port240/http/plugin, fetch https://github.com/libxse/commonlibf4 into extern/commonlibf4, checkout 7c8c6f8a349ac85abf6fc8a7e5a71732d9339954, initialize recursive pinned submodules, then git apply the bundled null-array patch. With a supported configured Windows compiler/SDK, xmake f -p windows -a x64 -m releasedbg followed by xmake builds the artifact only. See plugin/xmake.lua. Toolchain-specific cross configuration remains unverified; do not claim this is a tested one-command cross build. TopicInfoPatcher has NO completed libxse migration/build recipe yet; finish that bounded API migration before attempting its isolated build. Avoid the legacy upstream build dependency auto-fetch recipe as an approved .240 build.

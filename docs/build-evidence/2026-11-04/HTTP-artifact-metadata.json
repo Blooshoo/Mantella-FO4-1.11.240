@@ -1,0 +1,60 @@
+{
+  "file": "staging/F4SE_HTTP.dll",
+  "bytes": 922624,
+  "sha256": "6545d67282a02840ed87629df79d9c4152e026b6156f740a8f012b5d755af14a",
+  "machine": "AMD64",
+  "format": "PE32+ DLL",
+  "entry_rva": "0x87824",
+  "exports": {
+    "F4SEPlugin_Load": "0x1290",
+    "F4SEPlugin_Version": "0xd5000"
+  },
+  "metadata": {
+    "data_version": 1,
+    "plugin_version": "0x1f00000",
+    "name": "F4SE_HTTP",
+    "author": "Leidtier (upstream), kalli/port-240",
+    "address_independence": 0,
+    "structure_independence": 0,
+    "compatible_versions": [
+      "0x10b0f00",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0"
+    ],
+    "minimum_f4se": "0x0"
+  },
+  "imports": [
+    "KERNEL32.dll",
+    "WINHTTP.dll",
+    "MSVCP140.dll",
+    "bcrypt.dll",
+    "ole32.dll",
+    "VERSION.dll",
+    "USER32.dll",
+    "SHELL32.dll",
+    "VCRUNTIME140.dll",
+    "api-ms-win-crt-locale-l1-1-0.dll",
+    "api-ms-win-crt-stdio-l1-1-0.dll",
+    "api-ms-win-crt-runtime-l1-1-0.dll",
+    "api-ms-win-crt-math-l1-1-0.dll",
+    "api-ms-win-crt-time-l1-1-0.dll",
+    "api-ms-win-crt-filesystem-l1-1-0.dll",
+    "api-ms-win-crt-heap-l1-1-0.dll",
+    "api-ms-win-crt-string-l1-1-0.dll",
+    "api-ms-win-crt-convert-l1-1-0.dll"
+  ],
+  "verification": "PASS: binary structure, exports and exact-runtime declaration only; not a runtime test"
+}
