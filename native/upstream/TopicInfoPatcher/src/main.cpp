@@ -1,7 +1,8 @@
 #include <Windows.h>
 #include "Guard240.h"  // kalli/port-240: fail-closed offset guard (port240/plugin)
 #include "mantella240/topic_patch.h"  // kalli/port-240: PatchTopicInfo decision logic (port240/include)
-#include <deque>
+#include <atomic>
+#include <memory>
 #include <mutex>
 
 bool isVR;
@@ -161,10 +162,38 @@ bool isMenuModeActive(std::monostate) {
 // the decision logic live in port240/include/mantella240/topic_patch.h (tested on Linux). The old
 // global lastText / in-place memset+strcpy_s into pooled string memory is gone.
 static mantella240::TopicPatchState g_topicPatch;
-// Replaced entries stay referenced for a long window (topic_patch.h thread-safety note): the subtitle
-// UI on the main thread may still read the old pooled entry after the VM thread swapped in a new one.
-// Only touched inside patch_response's critical section.
-static std::deque<RE::BSFixedStringCS> g_keepAlive;
+
+// kalli/port-240 (Sol re-review N02): ownership protocol of topic_patch.h on the engine types. The new
+// entry is acquired into a local, published with ONE atomic exchange of the response's pointer slot,
+// and the response's reference on the old entry is transferred to g_topicPatch and never released.
+// Replaces BGSLocalizedString::operator=, which releases the LIVE slot before GetEntry rewrites it.
+// Written against libxse/commonlibf4 7c8c6f8 (RE/B/BSStringPool.h, BSFixedString.h,
+// BGSLocalizedString.h, TESResponse.h), the declared migration target; NOT compiled.
+namespace topic_slot {
+	using Entry = RE::BSStringPool::Entry;
+	// BGSLocalizedString == one BSFixedStringCS == one Entry* at offset 0 (libxse asserts sizeof 8).
+	static_assert(sizeof(RE::BGSLocalizedString) == sizeof(Entry*), "response text must be one pool entry pointer");
+	static_assert(sizeof(RE::BSFixedStringCS) == sizeof(Entry*), "BSFixedStringCS must be one pool entry pointer");
+	static_assert(alignof(RE::TESResponse) >= std::atomic_ref<Entry*>::required_alignment);
+
+	inline Entry*& slot(RE::TESResponse* r) { return *reinterpret_cast<Entry**>(std::addressof(r->responseText)); }
+
+	struct Ops {
+		std::string_view text(RE::TESResponse* r) const { return std::string_view(r->responseText); }
+		Entry* acquire(std::string_view t) const {  // +1 reference, like the BSFixedStringCS constructor
+			Entry* e = nullptr;
+			if (!t.empty()) {
+				const std::string z(t);  // NUL-terminated copy
+				RE::GetEntry<char>(e, z.c_str(), true);  // case-sensitive pool, as BSFixedStringCS
+			}
+			return e;
+		}
+		Entry* exchange(RE::TESResponse* r, Entry* e) const noexcept {
+			return std::atomic_ref<Entry*>(slot(r)).exchange(e, std::memory_order_acq_rel);
+		}
+		void release(Entry* e) const { RE::BSStringPool::Entry::release(e); }  // a local, never the slot
+	};
+}
 
 void CopyFuz(std::string fname) {							// Copy the generated FUZ file to the requested name
 	char exe_path[_MAX_PATH];
@@ -178,8 +207,8 @@ void CopyFuz(std::string fname) {							// Copy the generated FUZ file to the re
 	CopyFile(src_path.c_str(), target_file.c_str(), false);
 	}
 
-// Replace the response text of a Mantella topic. kalli/port-240: assigns a NEW pooled string to this
-// one response (CommonLib BGSLocalizedString::operator=) instead of rewriting shared pool memory.
+// Replace the response text of a Mantella topic. kalli/port-240: publishes a NEW pooled string for this
+// one response (topic_slot::Ops) instead of rewriting shared pool memory.
 int PatchTopicInfo(std::monostate, RE::TESTopic *topic , std::string new_text) {
 	using mantella240::PatchResult;
 	if (!gate("PatchTopicInfo")) return static_cast<int>(PatchResult::Disabled);
@@ -193,14 +222,9 @@ int PatchTopicInfo(std::monostate, RE::TESTopic *topic , std::string new_text) {
 	RE::TESResponse* response = tpInfo->responses.head;
 	logger::info("Topic {:X} TopicInfo {:X} Text: {}", topic->formID, tpInfo->formID, new_text);
 
-	const PatchResult r = mantella240::patch_response(g_topicPatch, response, new_text,
-		[](RE::TESResponse* resp) { return std::string_view(resp->responseText); },
-		[](RE::TESResponse* resp, std::string_view text) {  // runs under g_topicPatch's lock
-			g_keepAlive.emplace_back(std::string_view(resp->responseText));  // +1 ref on the old entry
-			if (g_keepAlive.size() > mantella240::kRetainReplacedStrings) g_keepAlive.pop_front();
-			resp->responseText = text;  // new pool entry for this response only (one pointer store)
-		});
+	const PatchResult r = mantella240::patch_response(g_topicPatch, response, new_text, topic_slot::Ops{});
 	if (r == PatchResult::TooLong) logger::warn("Replacement too long! ({:d})", new_text.length());
+	else if (r == PatchResult::RetentionFull) logger::critical("PatchTopicInfo: string retention cap reached; refusing further patches this session (restart the game)");
 	else if (r == PatchResult::NotMantella) logger::warn("TopicInfo text is neither the Mantella placeholder nor our last text for this response");
 	return static_cast<int>(r);
 	}
