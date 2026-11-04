@@ -1,0 +1,32 @@
+[
+  {
+    "name": "TESTopicInfo::SetOverrideFileName",
+    "exit": 1,
+    "static_assert": true
+  },
+  {
+    "name": "BSAudioManager::ClearCache",
+    "exit": 1,
+    "static_assert": true
+  },
+  {
+    "name": "ViewCasterUpdate event source",
+    "exit": 1,
+    "static_assert": true
+  },
+  {
+    "name": "BSPointerHandle lookup (crosshair)",
+    "exit": 1,
+    "static_assert": true
+  },
+  {
+    "name": "TakeScreenshot",
+    "exit": 0,
+    "static_assert": false
+  },
+  {
+    "name": "TakeScreenshot (test_guard.cpp)",
+    "exit": 1,
+    "static_assert": true
+  }
+]

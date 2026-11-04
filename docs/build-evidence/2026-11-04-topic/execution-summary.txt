@@ -1,0 +1,12 @@
+Observed completed local runs at ffffcadfc27cda54f8be46454b30c78fdffc1f9c; not new Cloud runs.
+main.cpp: exit 0, 65 warnings.
+Crosshair.cpp: exit 0, 65 warnings.
+LLD link: exit 0, no diagnostic output.
+Portable native runner: exit 0; ASan/UBSan/TSan passed.
+Portable HTTP runner: exit 0; ASan/UBSan/TSan passed.
+Optional real executable/address library/official PSC gates skipped.
+64 tracked native files compared: zero mismatches.
+Production negative status tests: four expected static-assert failures; screenshot main compiles.
+Screenshot test_guard negative: expected static-assert failure.
+Independent PE parser and LLVM readobj: structural/export/runtime metadata checks pass.
+No game load, install or runtime validation.

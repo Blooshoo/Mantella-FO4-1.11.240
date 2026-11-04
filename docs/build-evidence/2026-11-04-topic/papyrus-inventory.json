@@ -1,0 +1,57 @@
+[
+  {
+    "script": "TopicInfoPatcher",
+    "name": "PatchTopicInfo",
+    "cpp": "int PatchTopicInfo(std::monostate, RE::TESTopic *topic , std::string new_text) {"
+  },
+  {
+    "script": "TopicInfoPatcher",
+    "name": "ClearCache",
+    "cpp": "void ClearCache(std::monostate) {"
+  },
+  {
+    "script": "TopicInfoPatcher",
+    "name": "SetOverrideFileName",
+    "cpp": "void SetOverrideFileName(std::monostate, RE::TESTopic* this_p, std::string name) {"
+  },
+  {
+    "script": "TopicInfoPatcher",
+    "name": "StringRemoveWhiteSpace",
+    "cpp": "std::string StringRemoveWhiteSpace(std::monostate, std::string str) {"
+  },
+  {
+    "script": "TopicInfoPatcher",
+    "name": "TakeScreenShot",
+    "cpp": "void TakeScreenShot(std::monostate, std::string filename, int filetype, int sstype) {"
+  },
+  {
+    "script": "TopicInfoPatcher",
+    "name": "isMenuModeActive",
+    "cpp": "bool isMenuModeActive(std::monostate) {"
+  },
+  {
+    "script": "TopicInfoPatcher",
+    "name": "saveFloat",
+    "cpp": "bool saveFloat(std::monostate, std::string key) {"
+  },
+  {
+    "script": "TopicInfoPatcher",
+    "name": "saveInt",
+    "cpp": "bool saveInt(std::monostate, std::string key) {"
+  },
+  {
+    "script": "TopicInfoPatcher",
+    "name": "restoreFloat",
+    "cpp": "bool restoreFloat(std::monostate, std::string key) {"
+  },
+  {
+    "script": "TopicInfoPatcher",
+    "name": "restoreInt",
+    "cpp": "bool restoreInt(std::monostate, std::string key) {"
+  },
+  {
+    "script": "TopicInfoPatcher",
+    "name": "GetLastActorCoords",
+    "cpp": "std::vector<float> GetLastActorCoords(std::monostate) {"
+  }
+]

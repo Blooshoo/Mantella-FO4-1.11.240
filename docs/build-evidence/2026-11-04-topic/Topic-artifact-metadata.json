@@ -1,0 +1,110 @@
+{
+  "file": "TopicInfoPatcher.dll",
+  "bytes": 777216,
+  "sha256": "f4d8700fafe9e2fa5ddff9f3584b7e9597c6a0514babc01dad5b9b0eec289250",
+  "machine": "AMD64",
+  "format": "PE32+ DLL",
+  "entry_rva": "0x6f574",
+  "exports": {
+    "F4SEPlugin_Load": "0x54e0",
+    "F4SEPlugin_Query": "0x1000",
+    "F4SEPlugin_Version": "0xb5000"
+  },
+  "metadata": {
+    "data_version": 1,
+    "plugin_version": "0x90040",
+    "name": "TopicInfoPatcher",
+    "author": "peteben",
+    "address_independence": 4,
+    "structure_independence": 0,
+    "compatible_versions": [
+      "0x10b0f00",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0",
+      "0x0"
+    ],
+    "minimum_f4se": "0x0"
+  },
+  "imports": [
+    "MSVCP140.dll",
+    "KERNEL32.dll",
+    "bcrypt.dll",
+    "ole32.dll",
+    "VERSION.dll",
+    "USER32.dll",
+    "SHELL32.dll",
+    "VCRUNTIME140.dll",
+    "api-ms-win-crt-locale-l1-1-0.dll",
+    "api-ms-win-crt-stdio-l1-1-0.dll",
+    "api-ms-win-crt-math-l1-1-0.dll",
+    "api-ms-win-crt-runtime-l1-1-0.dll",
+    "api-ms-win-crt-time-l1-1-0.dll",
+    "api-ms-win-crt-filesystem-l1-1-0.dll",
+    "api-ms-win-crt-heap-l1-1-0.dll",
+    "api-ms-win-crt-string-l1-1-0.dll",
+    "api-ms-win-crt-convert-l1-1-0.dll"
+  ],
+  "sections": [
+    {
+      "name": ".text",
+      "vsize": 453606,
+      "rva": 4096,
+      "rawsize": 453632,
+      "raw": 1024,
+      "flags": 1610612768
+    },
+    {
+      "name": ".rdata",
+      "vsize": 280292,
+      "rva": 458752,
+      "rawsize": 280576,
+      "raw": 454656,
+      "flags": 1073741888
+    },
+    {
+      "name": ".data",
+      "vsize": 21296,
+      "rva": 741376,
+      "rawsize": 17920,
+      "raw": 735232,
+      "flags": 3221225536
+    },
+    {
+      "name": ".pdata",
+      "vsize": 20964,
+      "rva": 765952,
+      "rawsize": 20992,
+      "raw": 753152,
+      "flags": 1073741888
+    },
+    {
+      "name": ".tls",
+      "vsize": 321,
+      "rva": 790528,
+      "rawsize": 512,
+      "raw": 774144,
+      "flags": 3221225536
+    },
+    {
+      "name": ".reloc",
+      "vsize": 2340,
+      "rva": 794624,
+      "rawsize": 2560,
+      "raw": 774656,
+      "flags": 1107296320
+    }
+  ],
+  "verification": "PASS: binary structure, exports and exact-runtime declaration only; not a runtime test"
+}

@@ -1,0 +1,84 @@
+# TopicInfoPatcher real Windows-target build — 2026-11-04
+
+Source frozen at **ffffcadfc27cda54f8be46454b30c78fdffc1f9c**, parent e98d30b0906aa7b065423008078eaf9de83f2563. This sanitized report is published as evidence only; binaries and raw private build logs are not included. No source fixes, installation, enabling, game/Proton launch, live service access or runtime acceptance.
+
+## Review verdict — build success, acceptance blocked
+
+Independent source review approves the bounded removals, not every claimed gate. Two medium findings need source-author correction/review before claiming complete fail-closed migration acceptance:
+
+1. **Pre-existing engine-access bypass:** main.cpp:339 registers MessageHandler even when guard evaluation fails. On GameDataReady, main.cpp:132-134 unconditionally invokes GameSettingCollection::GetSingleton(), bypassing allowed(). Thus engine-touching **natives** remain disabled, but not every engine access. A now-loadable DLL can exercise this degraded path; guard failure is not a safe-all-engine guarantee. Gate this listener-side lookup on validated state (or reject load before listener registration), retaining pure-helper behavior only if deliberately supported. No source fix was made here.
+2. **Screenshot production tripwire gap:** main.cpp:269 asserts only ID 2229158, not known-and-not-Verified status. An isolated real-target promotion to Verified compiled main successfully, while the portable test unit rejected it. Present screenshot status still disables the native, but production DLL-only builds do not enforce review of its unproven ABI when status changes. Add a production status tripwire or require a genuinely reviewed ABI migration; do not merely change the table to Verified.
+
+These are not linker/ABI-layout compilation failures. The first predates this commit, the second is a future-change defense gap, not evidence that the screenshot native is currently enabled. No engine-source changes authorized or performed.
+
+## Actionable repairs and focused reproduction
+
+### G01 — guard-failed GameDataReady still accesses the engine (medium, pre-existing)
+
+Frozen source: [main.cpp:125-140](https://github.com/Blooshoo/Mantella-FO4-1.11.240/blob/ffffcadfc27cda54f8be46454b30c78fdffc1f9c/native/upstream/TopicInfoPatcher/src/main.cpp#L125-L140) and [main.cpp:325-345](https://github.com/Blooshoo/Mantella-FO4-1.11.240/blob/ffffcadfc27cda54f8be46454b30c78fdffc1f9c/native/upstream/TopicInfoPatcher/src/main.cpp#L325-L345).
+
+Source-level path: make address-library read/validation fail -> evaluate_loaded leaves core_ok false -> F4SEPlugin_Load logs failure but registers MessageHandler -> GameDataReady calls GetSingleton unconditionally. This path is proven by control-flow inspection, NOT by launching this DLL. The first lookup can occur before any script invokes a gated native.
+
+Expected repair: guard the listener-side singleton acquisition with validated state appropriate to GameSettingCollection (at minimum evaluated, exact runtime and core_ok plus the required verified singleton dependency), or deliberately fail plugin load before registering this engine-touching listener. Do not merely null-check the singleton after obtaining it, and do not use a guessed relocation or claim a pure helper requires engine access. Preserve the engine-independent whitespace helper if retaining degraded registration is intentional. Handle any state reset/failure so stale GameSettings cannot become usable.
+
+Expected focused regression: inject a fake/mock singleton accessor counting calls in an extracted testable callback decision; dispatch GameDataReady with never-evaluated state, failed library/core validation, wrong runtime, and missing/invalid singleton dependency. Each must leave the counter at zero and settings unavailable; a validated state may call exactly once. Include existing public native refusal checks. Test the actual callback decision used in production, not an unrelated mock-only duplicate. Tests must not initialize a real engine singleton. Re-run portable sanitizers and real Windows-target compilation of both project units after the fix. No such source fix/regression is included in this evidence commit.
+
+### G02 — screenshot production-only build lacks future-status tripwire (medium)
+
+Frozen [main.cpp:265-279](https://github.com/Blooshoo/Mantella-FO4-1.11.240/blob/ffffcadfc27cda54f8be46454b30c78fdffc1f9c/native/upstream/TopicInfoPatcher/src/main.cpp#L265-L279); [test_guard.cpp:36](https://github.com/Blooshoo/Mantella-FO4-1.11.240/blob/ffffcadfc27cda54f8be46454b30c78fdffc1f9c/native/port240/tests/test_guard.cpp#L36) supplies the test-only protection.
+
+Expected repair: add a production known-name-and-not-Verified assertion while the current screenshot ABI is unproven, alongside the ID assertion. Alternatively supply genuine reviewed ABI evidence and deliberate migration; merely marking the catalog entry Verified is not an ABI proof. Current status must stay LocatedAbiUnproven and its native disabled pending that review.
+
+[Minimal isolated real-target repro](verify_status_tripwires.py) promotes one entry at a time in a scratch copied header tree. It must never edit the repository or vendor headers. After provisioning scratch inputs described below and generating Version.h using the existing compiler driver:
+
+    python3 docs/build-evidence/2026-11-04-topic/verify_status_tripwires.py
+
+On this frozen source the four omitted-call production assertions fail as expected, screenshot main compiles, and screenshot test_guard fails. [Captured results](tripwire-results.json) and [exact build argv templates](build-commands.json) are from the prior completed local runs; no new full build was needed for this publication. The relocated reproducer passed syntax checks plus a six-case fixture/command harness with subprocesses mocked; the harness verified each exact one-entry promotion and existing header/source paths. No compiler was rerun for publication, and this is not a new end-to-end real-target execution. It writes diagnostic logs/results only under MANTELLA_BUILD_ROOT/evidence and copied scratch headers under negative/. It performs no link, install, vendor-source edit or network request. Restrict this variable to an isolated scratch build; copied header changes are deliberate negative-test fixtures, not fixes. After a production screenshot tripwire is added, the screenshot-main case must fail with its specific assertion as well; update the expected results deliberately for that new SHA.
+
+## Actual result
+
+Both project C++ translation units listed by cmake/sourcelist.cmake and filesystem inventory compiled for **x86_64-pc-windows-msvc**, using real Microsoft SDK/STL headers: src/main.cpp and src/Crosshair.cpp. Both exited 0, each with 65 warnings (dependency overrides plus NDEBUG redefinition); no ignored layout assertions or host-Linux substitute compilation. Three topic_slot assertions remain unchanged and passed. All 64 tracked native files used through the isolated build view matched the frozen Git revision byte-for-byte. topic_patch.h is unchanged, preserving reviewed M01/M02 behavior.
+
+Normal LLD DLL link exited **0**, no linker diagnostics, /force, unresolved-symbol suppression, stubs or fabricated returns. Artifact **TopicInfoPatcher.dll**, **777216 bytes**, SHA-256 **f4d8700fafe9e2fa5ddff9f3584b7e9597c6a0514babc01dad5b9b0eec289250**. This is an actual native DLL, not a smoke placeholder.
+
+[Independent PE decode](Topic-artifact-metadata.json): AMD64 PE32+ DLL, nonzero CRT entry point, exports exactly F4SEPlugin_Query, F4SEPlugin_Load, F4SEPlugin_Version. Metadata name TopicInfoPatcher, author peteben, version **0.9.4.0** (0x00090040, inherited source value; generated project Version.h is 1.0.0). Only runtime **1.11.240.0**, zero-terminated. Address-independence field **4** means the pinned API's AddressLibrary_1_11_137 bit; structure-independence **0**, no no-struct/layout-independent declaration. Do not apply the older HTTP parser expectation of both flags zero to this plugin. F4SE minimum field remains **0/unspecified**, not enforced 0.7.9. LLVM readobj independently confirms headers/exports/imports.
+
+Requires current supported Microsoft Visual C++ v14 x64 runtime and UCRT/API sets; OS imports include kernel32, bcrypt, ole32, version, user32, shell32. No CommonLib/spdlog/curl/cpr DLL import. Exact imports in metadata; binary inspection does not prove Proton availability or correct game behavior. CMake version.rc.in is packaging metadata, not another C++ unit; no resource compiler was present, so this direct-link artifact **does not contain the optional VERSIONINFO resource**. Not a claim that legacy CMake/XMake completed.
+
+## Build-only inputs and commands
+
+Reused already legally provisioned Clang/LLVM/LLD **19.1.1**, CRT/STL **14.44.35220**, SDK family **10.0.26100** and existing local dependency archive. No downloads, license acceptance, global installs/configuration or additional spend.
+
+Pinned commonlibf4 **7c8c6f8a349ac85abf6fc8a7e5a71732d9339954**, commonlib-shared **29fbdb0e2dc548c9ab22f6964981d75090dc9094**, spdlog **486b55554f11c9cccc913e11a87085b2a91f706f** (v1.16.0). Same declared three-line null-array dependency patch and generated API Windows-macro hygiene include as prior HTTP evidence. No new dependency logic changes. Reused **96-object** archive SHA-256 **fc2fd0982384d2bd3f3c3e334bc10cbd2aedad20dc5d4794d574b797309a74c2**, whose original sweep attempted 98 units; RegistrationMap and RegistrationMapUnique remain excluded/unfixed for actual upstream bare returns in non-void functions. Neither was needed to resolve this DLL. This does NOT claim a complete clean upstream library build.
+
+Isolated scratch root uses native/ from the frozen disposable source worktree, read-only reused deps/ and sdk/ views, fresh obj/, generated/, staging/, evidence/. Project source remains unmodified. Existing committed docs/build-evidence/2026-11-04/compile_plugin.py is used with MANTELLA_BUILD_ROOT and LLVM_BIN set to the scratch root and existing toolchain respectively. Deployment variables Fallout4Path, MO2_MODS_FOLDER, XSE_FO4_MODS_PATH, XSE_FO4_GAME_PATH are scrubbed for subprocesses; COPY_BUILD remains OFF/not invoked. No build install hooks run.
+
+Compiler flags:
+
+    /nologo --target=x86_64-pc-windows-msvc /std:c++latest /EHsc /MD /O2 /DNDEBUG
+    /D_CRT_USE_BUILTIN_OFFSETOF /DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN
+    /DSPDLOG_USE_STD_FORMAT /DSPDLOG_WCHAR_TO_UTF8_SUPPORT -fms-compatibility-version=19.44
+
+Includes are SDK CRT/UCRT/UM/shared/winrt, commonlibf4 and commonlib-shared, spdlog, port240 HTTP/general include, plugin glue, generated Version.h. Both units use /FI native/upstream/TopicInfoPatcher/src/PCH.h; Crosshair adds -ferror-limit=0. No layout/size/offset assertion disabled. _CRT_USE_BUILTIN_OFFSETOF uses the SDK's supported builtin for Clang constexpr offsets. Full exact argv JSON and compiler logs retained locally.
+
+Reproduction after provisioning the same scratch inputs (copy the previously committed compile_plugin.py to this scratch root; the preflight below normalizes any literal abbreviated header path in that scratch copy only; see previous committed evidence for dependency preparation):
+
+    python3 -c 'from pathlib import Path; p=Path("compile_plugin.py"); s=p.read_text(); p.write_text(s.replace("native"+chr(8230)+"/PCH.h", "/".join(["native","upstream","TopicInfoPatcher","src","PCH.h"])))'
+    python3 compile_plugin.py topic
+    python3 -c 'import compile_plugin as b; raise SystemExit(b.compile_one("native/upstream/TopicInfoPatcher/src/Crosshair.cpp", "crosshair", ["/FI"+str(b.R/"native"/"upstream"/"TopicInfoPatcher"/"src"/"PCH.h"), "-ferror-limit=0"]))'
+
+Link with lld-link /dll /machine:x64 /opt:ref /opt:icf /incremental:no /timestamp:0, CRT x64/UCRT x64/UM x64 library paths, topic.obj, crosshair.obj, the declared subset archive, kernel32.lib advapi32.lib bcrypt.lib d3d11.lib d3dcompiler.lib dbghelp.lib dxgi.lib ole32.lib shell32.lib user32.lib version.lib ws2_32.lib. Normal compiler directives select the dynamic CRT; no manually guessed entry point. Timestamp zero is not a claim of independent bit-identical rebuild.
+
+## Behavior review and verification boundaries
+
+Removed SetOverrideFileName/CopyFuz, ClearCache engine call, crosshair event-source/lookup calls are not restored features: their prior 1.11.240 gates already disabled the public paths because dependencies were Unresolved. Crosshair had a namespace-scope old VariantOffset relocation constructed at DLL load even though sink registration was gated; removal additionally eliminates that unguarded legacy relocation construction. Bindings remain callable but disabled (no-op for two void natives, empty float array for crosshair). Features remain unavailable: crosshair-hotkey targeting, override voice filenames/cache clear, Mantella Vision screenshot; this is not fully functional Mantella certification or proof activation-perk fallback works in the real game. Other-runtime compatibility is intentionally removed, not preserved: loader and version declaration now restrict to exactly 1.11.240/non-editor.
+
+Documents/save-folder discovery can decline file creation; the dependency file sink uses path.string(), so wide executable-path handling is not proof of end-to-end Unicode-safe logging. An extra debugger sink is also configured. REX logging delegates to F4SE::Init with log=true, Trace level/flush, TopicInfoPatcher filename, matching pattern, hook=false/trampoline default false. Pinned API implementation confirms initialization and logging behavior; dependency API.cpp still needs the existing build-only macro shim. Project units no longer introduce Windows.h macros. Init occurs before the version/editor checks (interface/log setup), but explicit checks precede plugin listener/native registration. The wide 32768-character executable-path lookup rejects failure/truncation; GetExecutingModule in the pinned library uses GetModuleHandleA(nullptr), i.e. EXE rather than this DLL. Guard failure leaves engine natives disabled; pure text helper can remain available. Plugin load can still return true with guard disabled: that is not engine functionality acceptance.
+
+[Eleven Papyrus bindings/signatures](papyrus-inventory.json) are unchanged versus parent and match bundled src/TopicInfoPatcher.psc: PatchTopicInfo(Topic,string)->int; ClearCache()->void; SetOverrideFileName(Topic,string)->void; StringRemoveWhiteSpace(string)->string; TakeScreenShot(string,int,int)->void; isMenuModeActive()->bool; saveFloat/saveInt/restoreFloat/restoreInt(string)->bool; GetLastActorCoords()->float[]. All remain global natives. Bundled source matching is not independent official installed PEX validation.
+
+Actual real-target negative builds used isolated copied include trees (NOT source changes) promoting each omitted target to Verified: four production tripwires failed compilation with their expected static assertion (SetOverrideFileName, ClearCache, ViewCaster source, crosshair handle). Screenshot differs deliberately: production main still compiles if its status is promoted (ID-only assertion there); **test_guard.cpp's screenshot status assertion fails**. Its current LocatedAbiUnproven status keeps it disabled. Thus future verification must run tests; production DLL-only compilation does NOT independently enforce screenshot's unproven-status tripwire. First shadow experiment failed to override sibling quoted includes; corrected isolated full include/glue copies were used for the reported tests. Never mistake the ineffective initial shadow results for broken production assertions.
+
+Portable native and HTTP regression runners both exited **0**, including ASan/UBSan/TSan; HTTP core 195 checks and dispatcher 81 checks, zero failures. git diff --check passed. Real EXE/address-library and official script checks skipped because optional inputs were deliberately unset; no freshly executed Windows runtime, Papyrus VM, real WinHTTP, or loaded-image validation. Host-portable tests are not ABI evidence; only actual Windows-target compilation passed the real-header assertions.
+
+Engine reader/access/layout/lifetime, concurrent writers/form reloads, -6 script handling, runtime platform behavior and durable-character session continuity remain unresolved independent gates. Existing pre-migration issues are not silently recertified. Only first-party text/JSON/build-test code is included here; no SDK/vendor/game content, credentials, DLL, private paths or transcript. Compiler warning excerpts containing vendor source were deliberately not copied. [Execution summary](execution-summary.txt) records the results without those excerpts. Preserve license provenance (including linked commonlib licensing and exceptions); no binary distribution is authorized by this report.
