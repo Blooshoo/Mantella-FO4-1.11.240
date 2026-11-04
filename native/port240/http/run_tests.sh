@@ -13,18 +13,26 @@ export F4SEHTTP240_UPSTREAM_PSC="${F4SEHTTP240_UPSTREAM_PSC:-$root/upstream/F4SE
 
 g++ "${flags[@]}" "$here/tests/test_http_core.cpp" -o "$out/test_http_core"
 g++ "${flags[@]}" "$here/tests/test_http_ids.cpp" -o "$out/test_http_ids"
+g++ "${flags[@]}" "$here/tests/test_dispatcher.cpp" -o "$out/test_dispatcher"
 "$out/test_http_core"
 "$out/test_http_ids"
+"$out/test_dispatcher"
 
-# Same core under ASan+UBSan and TSan (threading test exercises the store lock).
+# Same core and dispatcher under ASan+UBSan and TSan (store lock; R2-01 blocking-transport scheduling).
 g++ "${flags[@]}" -fsanitize=address,undefined -fno-sanitize-recover=all "$here/tests/test_http_core.cpp" -o "$out/test_http_core_asan"
 "$out/test_http_core_asan" >/dev/null
+g++ "${flags[@]}" -fsanitize=address,undefined -fno-sanitize-recover=all "$here/tests/test_dispatcher.cpp" -o "$out/test_dispatcher_asan"
+"$out/test_dispatcher_asan" >/dev/null
 g++ "${flags[@]}" -fsanitize=thread "$here/tests/test_http_core.cpp" -o "$out/test_http_core_tsan"
+g++ "${flags[@]}" -fsanitize=thread "$here/tests/test_dispatcher.cpp" -o "$out/test_dispatcher_tsan"
 # TSan aborts ("unexpected memory mapping") on kernels with high mmap ASLR entropy; disable ASLR for
 # this one process only (no system setting is changed).
 tsan_run=("$out/test_http_core_tsan")
 if command -v setarch >/dev/null 2>&1; then tsan_run=(setarch "$(uname -m)" -R "$out/test_http_core_tsan"); fi
 TSAN_OPTIONS=halt_on_error=1 "${tsan_run[@]}" >/dev/null
+tsan_disp=("$out/test_dispatcher_tsan")
+if command -v setarch >/dev/null 2>&1; then tsan_disp=(setarch "$(uname -m)" -R "$out/test_dispatcher_tsan"); fi
+TSAN_OPTIONS=halt_on_error=1 "${tsan_disp[@]}" >/dev/null
 echo "sanitizers: asan+ubsan OK, tsan OK"
 
 # Declaration lint: no plugin may claim address-library/layout independence (official F4SE then

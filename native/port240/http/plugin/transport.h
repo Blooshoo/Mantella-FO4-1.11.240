@@ -2,35 +2,30 @@
 // so <Windows.h>/<winhttp.h> never meet libxse's own Win32 declarations.
 #pragma once
 
-#include "f4sehttp240/http_core.h"
+#include "f4sehttp240/dispatcher.h"
 
-#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace f4sehttp240::win {
 
-struct HttpResult { int status = 0; std::string body; std::string error; };
+using HttpResult = f4sehttp240::TransportResult;
 
 // Cooperative cancellation for one synchronous WinHTTP request (Sol review A06; re-review N01).
-// cancel() only sets a flag. Handles are owned, used and closed exclusively by the worker thread
-// (no cross-thread WinHttpCloseHandle, so a handle can never be used after close or after its
-// value was reused). The worker checks the flag between every WinHTTP step and stops. A step that
-// is already blocked finishes or times out (bounded by WinHttpSetTimeouts); its result is then
-// discarded by the epoch check in HttpCore::complete, so it can never answer a newer conversation.
-class CancelToken {
-public:
-	void cancel() noexcept { cancelled_.store(true, std::memory_order_release); }
-	[[nodiscard]] bool cancelled() const noexcept { return cancelled_.load(std::memory_order_acquire); }
-private:
-	std::atomic<bool> cancelled_{ false };
-};
+// CancelToken (dispatcher.h) only sets a flag. Handles are owned, used and closed exclusively by the
+// worker thread (no cross-thread WinHttpCloseHandle, so a handle can never be used after close or
+// after its value was reused). The worker checks the flag between every WinHTTP step and stops. A
+// step that is already blocked finishes or times out (bounded by WinHttpSetTimeouts); its result is
+// then discarded by the epoch check in HttpCore::complete, so it can never answer a newer
+// conversation. While it is blocked, the Dispatcher has already retired its thread and refilled its
+// seat (re-review R2-01), so it cannot delay a newer conversation either.
+using CancelToken = f4sehttp240::CancelToken;
 
 // Synchronous POST to http://<host>:<port><path>; bounded body size; never throws.
 // Redirects are never followed (Sol review A07): a 3xx is returned as an error, so a request can
 // never leave the loopback authority it was validated for.
-HttpResult post(const Request& r, std::size_t maxBody, CancelToken& cancel);
+HttpResult post(const Request& r, std::size_t maxBody, const CancelToken& cancel);
 
 // Base address of the running executable (GetModuleHandleW(nullptr)); replaces the pre-libxse
 // REL::Module::get().base() (Sol review A01). libxse's REL::ID resolves against the same module.

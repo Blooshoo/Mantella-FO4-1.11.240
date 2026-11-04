@@ -12,7 +12,8 @@
 //     BSTThreadScrapFunction / DispatchMethodCall ABI dependency.
 //   * Dictionary store / JSON / request validation moved into the tested header-only core
 //     (port240/http/include/f4sehttp240), which fixes upstream defects D1-D5 (dict_store.h).
-//   * Transport: WinHTTP on a small bounded worker pool (no cpr/curl/vcpkg dependency); redirects are
+//   * Transport: WinHTTP on a bounded cancellation-aware dispatcher (dispatcher.h; no cpr/curl/vcpkg
+//     dependency); redirects are
 //     never followed. Natives do no network I/O; building a request body is bounded by an aggregate
 //     node/byte budget (dict_store.h D6). HTTP completion only touches the mutex-guarded store and
 //     queue, never the VM. Replies are tagged with a conversation epoch (http_core.h) so a late
@@ -31,82 +32,35 @@
 #include <F4SE/F4SE.h>
 #include <RE/Fallout.h>
 
+#include "f4sehttp240/dispatcher.h"
 #include "f4sehttp240/http_core.h"
 #include "f4sehttp240/ids_check.h"
 #include "transport.h"  // Win32/WinHTTP live in transport_winhttp.cpp, never in this TU
 
-#include <condition_variable>
-#include <deque>
 #include <memory>
-#include <mutex>
 #include <span>
-#include <thread>
 
 namespace {
 
 using namespace f4sehttp240;
 
 constexpr REL::Version kRuntime240{ 1, 11, 240, 0 };
-constexpr std::size_t kMaxPendingRequests = 32;
-// A cancelled request that is already blocked inside WinHTTP keeps its worker until the step
-// returns or times out (cooperative cancellation, transport.h), so keep spare workers.
-constexpr unsigned kWorkers = 4;
 
-// Process-lifetime state, intentionally leaked: the detached workers below may still be blocked
-// on the condition variable (or inside WinHTTP) when the CRT runs static destructors at exit;
-// destroying a mutex/condition_variable/store under them would be undefined behaviour.
+// Process-lifetime state, intentionally leaked: dispatcher threads may still be blocked on a
+// condition variable (or inside WinHTTP) when the CRT runs static destructors at exit; destroying a
+// mutex/condition_variable/store under them would be undefined behaviour.
 DictStore& g_store = *new DictStore();
 ReplyQueue& g_queue = *new ReplyQueue();
 HttpCore& g_core = *new HttpCore(g_store, g_queue);
 
-class Workers {
-public:
-	// Detached on purpose: a joinable/jthread member would block in its destructor at game exit,
-	// because the workers sleep on the condition variable forever. Idempotent.
-	void start() {
-		std::lock_guard lk(mu_);
-		if (started_) return;
-		started_ = true;
-		for (unsigned i = 0; i < kWorkers; ++i) std::thread([this] { run(); }).detach();
-	}
-	bool enqueue(Request r) {
-		{
-			std::lock_guard lk(mu_);
-			if (jobs_.size() >= kMaxPendingRequests) return false;
-			jobs_.push_back(std::move(r));
-		}
-		cv_.notify_one();
-		return true;
-	}
-private:
-	void run() {
-		for (;;) {
-			Request r;
-			{
-				std::unique_lock lk(mu_);
-				cv_.wait(lk, [this] { return !jobs_.empty(); });
-				r = std::move(jobs_.front());
-				jobs_.pop_front();
-			}
-			try {
-				// Register before sending; a job whose conversation already ended is dropped unsent.
-				auto token = std::make_shared<win::CancelToken>();
-				const auto id = g_core.begin_inflight(r.epoch, [token] { token->cancel(); });
-				if (!id) continue;
-				struct End { std::uint64_t id; ~End() { g_core.end_inflight(id); } } end{ id };  // also on exceptions
-				win::HttpResult res = win::post(r, json::Limits{}.max_bytes, *token);
-				g_core.complete(r.epoch, res.status, res.body, res.error);  // stale epochs are discarded
-			} catch (...) {
-				g_core.complete(r.epoch, 0, {}, "internal error while sending request");
-			}
-		}
-	}
-	std::mutex mu_;
-	std::condition_variable cv_;
-	std::deque<Request> jobs_;
-	bool started_ = false;
-};
-Workers& g_workers = *new Workers();
+// Cancellation-aware scheduling (dispatcher.h, re-review R2-01): 4 seats serve the current
+// conversation; a request cancelled at a lifecycle boundary gives up its seat at once and keeps only
+// its own (bounded) thread until WinHTTP returns. Hard cap 4 + 12 threads; beyond it new requests get
+// an immediate error reply instead of waiting behind stale calls.
+Dispatcher& g_dispatcher = *new Dispatcher(
+	g_core,
+	[](const Request& r, const CancelToken& token) { return win::post(r, json::Limits{}.max_bytes, token); },
+	DispatcherLimits{ .live_workers = 4, .max_retired = 12, .max_pending = 32 });
 
 // ---------------------------------------------------------------------------------- natives
 // Signatures follow libxse BindNativeMethod: (std::monostate, args...) for global natives.
@@ -117,7 +71,11 @@ void sendLocalhostHttpRequest(Static, std::int32_t handle, std::int32_t port, st
 	auto req = g_core.prepare(handle, port, std::move(route), timeout);
 	if (!req) return;
 	const auto epoch = req->epoch;
-	if (!g_workers.enqueue(std::move(*req))) g_core.complete(epoch, 0, {}, "too many pending requests");
+	switch (g_dispatcher.enqueue(std::move(*req))) {
+	case Dispatcher::Enqueue::Queued: break;
+	case Dispatcher::Enqueue::Full: g_core.complete(epoch, 0, {}, kQueueFullError); break;
+	case Dispatcher::Enqueue::Saturated: g_core.complete(epoch, 0, {}, kSaturatedError); break;
+	}
 }
 std::int32_t createDictionary(Static) { return g_store.create(); }
 // Lifecycle boundary: also drops queued replies and cancels in-flight requests (http_core.h epochs).
@@ -210,7 +168,7 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se) {
 	const auto papyrus = F4SE::GetPapyrusInterface();
 	if (!papyrus) { REX::CRITICAL("F4SE_HTTP240: no Papyrus interface"); return false; }
 	if (!papyrus->Register(Bind)) { REX::CRITICAL("F4SE_HTTP240: Papyrus registration failed"); return false; }
-	g_workers.start();  // after registration; requests queued before this are picked up on start
+	g_dispatcher.start();  // after registration; requests queued before this are picked up on start
 	REX::INFO("F4SE_HTTP240 loaded (GetHandle polling; 0x97 key hint not synthesized)");
 	return true;
 }

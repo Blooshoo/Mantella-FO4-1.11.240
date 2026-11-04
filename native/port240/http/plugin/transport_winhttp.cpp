@@ -27,14 +27,15 @@ using Handle = std::unique_ptr<void, HClose>;
 
 // Per-operation inactivity bound. Mantella's server can take a while for the first LLM tokens; the
 // scripts' own poll timeout (HTTPTimeOutHolotapeValue polls) ends the conversation earlier, and the
-// next conversation start / clearAllDictionaries cancels anything still blocked (CancelToken).
+// next conversation start / clearAllDictionaries cancels the request (CancelToken) and retires its
+// thread from the dispatcher's seats; a step already blocked here still runs until this timeout.
 constexpr int kReceiveTimeoutMs = 3 * 60 * 1000;
 
 }  // namespace
 
 std::uintptr_t module_base() { return reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)); }
 
-HttpResult post(const Request& r, std::size_t maxBody, CancelToken& cancel) {
+HttpResult post(const Request& r, std::size_t maxBody, const CancelToken& cancel) {
 	HttpResult out;
 	auto fail = [&](const char* what) {
 		const DWORD e = GetLastError();

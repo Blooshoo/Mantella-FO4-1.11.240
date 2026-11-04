@@ -66,9 +66,21 @@ Sol adversarial review 2026-11-03 fixes (each has a test; see `reports/Mantella-
   `prepare()` is one transaction (boundary + validation + snapshot + epoch capture, N07); cancellation is
   cooperative — a flag checked between WinHTTP steps, every handle used and closed only by its worker thread (N01;
   the earlier cross-thread close could use a closed/reused handle). A step already blocked runs until it returns or
-  its timeout (receive 3 min); its result is discarded by epoch. Four synchronous workers can ALL be occupied by stale blocked requests, starving
-  a new conversation (R2-01, unresolved). Boundaries occur only when a valid start request is actually prepared (a start skipped by
+  its timeout (receive 3 min); its result is discarded by epoch. Boundaries occur only when a valid start request is actually prepared (a start skipped by
   the script's `_shouldRespond` or rejected for bad port/route/handle does not bump the epoch).
+* **R2-01** (re-review 2) worker starvation: the fixed pool of 4 synchronous workers is replaced by the portable
+  `include/f4sehttp240/dispatcher.h`. 4 *seats* serve the current epoch; a boundary's cancel hook retires the
+  thread of each cancelled call (it keeps running its blocked WinHTTP step on its own thread, handles never cross
+  threads) and refills the seat before `prepare()`/`clearAllDictionaries` returns, so a later request never waits
+  behind a stale call. Hard cap 4 + 12 threads; if the cap leaves no seat, `sendLocalhostHttpRequest` answers at
+  once with an error reply instead of queueing behind stale work, and a returning stale thread reclaims an empty
+  seat. `tests/test_dispatcher.cpp` blocks every fake transport call on a barrier that ignores cancellation and
+  never releases the old barriers before asserting: four superseded conversations, then the fifth starts; all
+  seats busy + `clearAllDictionaries`; cap exhaustion fails fast then recovers (also under ASan/UBSan/TSan). The
+  same repro against the pre-fix pool's scheduling starves. Limits: this bounds *scheduling*, not resource
+  release: a stale call still holds a thread and a loopback connection until its WinHTTP timeout; the WinHTTP
+  transport itself is unchanged except its signature and is still NOT compiled or run; a real asynchronous
+  (`WINHTTP_FLAG_ASYNC`) transport that interrupts the blocked step is a possible later improvement, not done.
 * **A07** redirects disabled (`WINHTTP_OPTION_REDIRECT_POLICY_NEVER` + `WINHTTP_DISABLE_REDIRECTS`), 3xx returned
   as an error; `WinHttpSetTimeouts` failure is now fatal for the request. (Windows-only; not executed here.)
 * **A01** the plugin no longer uses the pre-libxse `REL::Module::get().base()`; base comes from
@@ -85,7 +97,7 @@ the load gate re-checks runtime == 1.11.240. `tests/lint_declarations.py` enforc
 ## States
 | Item | State |
 |---|---|
-| core (`json.h`, `dict_store.h`, `http_core.h`, `contract.h`) | written; tests in `tests/test_http_core.cpp` (+ ASan/UBSan/TSan in `run_tests.sh`) |
+| core (`json.h`, `dict_store.h`, `http_core.h`, `contract.h`, `dispatcher.h`) | written; tests in `tests/test_http_core.cpp`, `tests/test_dispatcher.cpp` (+ ASan/UBSan/TSan in `run_tests.sh`) |
 | ID mapping (`ids240.h`, `ids_check.h`) | written; `tests/test_http_ids.cpp` against real exe + Address Library |
 | plugin glue `plugin/F4SE_HTTP240.cpp`, `plugin/xmake.lua` | **static source only** — needs MSVC/clang-cl + Windows SDK + libxse checkout. `transport_winhttp.cpp` passed a g++ `-fsyntax-only` check against hand-written stub Win32 headers (typo check only; NOT a Windows compile, says nothing about the real SDK) |
 | in-game | **not tested** |

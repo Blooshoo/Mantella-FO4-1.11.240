@@ -11,6 +11,9 @@
 5. **Separately authorized isolated Windows compilation**, after review work: complete TopicInfoPatcher migration from older CommonLib APIs onto pinned libxse (not merely a path swap), audit reachable IDs/layouts; compile F4SE_HTTP against pinned patched libxse. Keep COPY_BUILD=OFF, unset Fallout4Path, MO2_MODS_FOLDER, SKYRIM_FOLDER, XSE_FO4_MODS_PATH, XSE_FO4_GAME_PATH. No deploy/install. A successful Linux guard or headerless COFF smoke DLL is NOT a compiled plugin.
 6. **Separate runtime acceptance later**: owner-authorized disabled staging, main-menu F4SE load log, then real conversation. Crosshair lookup and Vision remain disabled/unproven; Simple Text Field contract/package remains unresolved. No runtime success may be inferred from unit tests.
 
+## Post-handoff progress (cloud session, 2026-11-04)
+- **R2-01: scheduling fixed portably; WinHTTP still uncompiled.** New `native/port240/http/include/f4sehttp240/dispatcher.h` (seats + retirement, hard thread cap, fail-fast `Saturated` error) replaces the plugin's fixed pool; regression `native/port240/http/tests/test_dispatcher.cpp` uses a cancellation-ignoring blocking transport and never releases old barriers before its assertions. The pre-fix scheduling starves on the same repro (checked in a scratch harness, not committed). Not addressed: stale calls still hold a thread and a socket until their WinHTTP timeout (no async transport). Items 2-6 untouched.
+
 ## Reproducible host-portable commands
 From repository root, Linux with g++ 13+, Python 3.11, pthread, Python pytest dependencies:
 
