@@ -10,7 +10,7 @@ from src.character_manager import Character
 from src.config.config_loader import ConfigLoader
 from src.llm.sentence import Sentence
 from src.games.external_character_info import external_character_info
-from src.games.gameable import Gameable
+from src.games.gameable import Gameable, VoicelinePreparationError
 import src.utils as utils
 from src.config.definitions.game_definitions import GameEnum
 from src.config.definitions.tts_definitions import TTSEnum
@@ -184,12 +184,18 @@ class Fallout4(Gameable):
     
     @utils.time_it
     def prepare_sentence_for_game(self, queue_output: Sentence, context_of_conversation: 'Context', config: ConfigLoader, topicID: int, isFirstLine: bool):
+        """Puts this sentence's voiceline where Fallout 4 plays it from.
+
+        The game plays whatever .fuz sits in the topic's slot (MantellaVoice00/<topic info>_1.fuz, alternating
+        between two topic infos), so a sentence without a usable .fuz must not leave the PREVIOUS line there:
+        the game would voice that old line (possibly another NPC's) under the new subtitle. That happens when
+        TTS skipped a too-short line (no voice file) or lip/fuz generation failed (only logged by
+        TTSable._generate_voiceline_files). The slot is then removed so the line has no audio (logged as an
+        error); if it can be neither replaced nor removed, VoicelinePreparationError is raised.
+        """
         audio_file = queue_output.voice_file
-        if not os.path.exists(audio_file):
-            return
-        
         mod_folder = config.mod_path
-        fuz_file = audio_file.replace(".wav",".fuz")
+        fuz_file = audio_file.replace(".wav",".fuz") if audio_file else ""
         speaker = queue_output.speaker
 
         dialogue_file_to_use = self.DIALOGUELINE1_FILENAME
@@ -208,15 +214,29 @@ class Fallout4(Gameable):
         
         # subtitle = queue_output.sentence
         # Copy FaceFX generated FUZ file
+        fuz_filepath = os.path.normpath(f"{voice_folder_path}/{dialogue_file_to_use}.fuz")
+        if fuz_file and os.path.exists(audio_file) and os.path.exists(fuz_file):
+            try:
+                shutil.copyfile(fuz_file, fuz_filepath)
+                self.__last_played_voiceline = queue_output.voice_file
+                logger.info(f"{speaker.name}: {queue_output.text}")
+                return
+            except Exception as e:
+                logger.error(f"Could not copy voiceline {fuz_file} to {fuz_filepath}: {e}")
+        elif fuz_file:
+            logger.error(f"No .fuz voiceline was created for '{queue_output.text.strip()}' ({fuz_file} is missing). "
+                         "Fallout 4 only plays .fuz files: check the LipFuzer (Creation Kit) or FaceFXWrapper / xWMAEncode / Fuz_extractor setup. "
+                         "This line will have no audio.")
+        # No new voiceline for this slot: never leave the previous one there
         try:
-            fuz_filepath = os.path.normpath(f"{voice_folder_path}/{dialogue_file_to_use}.fuz")
-            shutil.copyfile(fuz_file, fuz_filepath)
-        except Exception as e:
-            # only warn on failure
-            logger.warning(e)
-
-        self.__last_played_voiceline = queue_output.voice_file
-        logger.info(f"{speaker.name}: {queue_output.text}")
+            os.remove(fuz_filepath)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            raise VoicelinePreparationError(
+                f"{self.MANTELLA_VOICE_FOLDER}/{dialogue_file_to_use}.fuz still holds a previous voiceline and could not be "
+                f"replaced or removed ({type(e).__name__}); not playing stale audio. See MantellaSoftware's log.") from e
+        logger.info(f"{speaker.name} (no audio): {queue_output.text}")
 
     @utils.time_it
     def __delete_last_played_voiceline(self):

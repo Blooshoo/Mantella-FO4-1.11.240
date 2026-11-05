@@ -17,6 +17,12 @@ import shutil
 logger = utils.get_logger()
 
 
+class VoicelinePreparationError(Exception):
+    """The game would play the wrong audio for a sentence: the voiceline slot it plays from still holds a
+    previous line and could be neither replaced nor removed. GameStateManager answers with an error reply
+    instead of letting that stale line play under the new subtitle."""
+
+
 class Gameable(ABC):
     """Abstract class for different implementations of games to support. 
     Make a subclass for every game that Mantella is supposed to support and implement this interface

@@ -3,7 +3,7 @@ import regex
 from src.config.definitions.llm_definitions import NarrationHandlingEnum
 from src.games.equipment import Equipment, EquipmentItem
 from src.games.external_character_info import external_character_info
-from src.games.gameable import Gameable
+from src.games.gameable import Gameable, VoicelinePreparationError
 from src.llm.sentence import Sentence
 from src.output_manager import ChatManager
 from src.remember.remembering import Remembering
@@ -161,7 +161,12 @@ class GameStateManager:
 
         if sentence_to_play:
             if not sentence_to_play.error_message:
-                self.__game.prepare_sentence_for_game(sentence_to_play, self.__talk.context, self.__config, topicInfoID, self.__first_line)            
+                try:
+                    self.__game.prepare_sentence_for_game(sentence_to_play, self.__talk.context, self.__config, topicInfoID, self.__first_line)
+                except VoicelinePreparationError as e:
+                    logger.error(str(e))
+                    self.__talk.end()
+                    return self.error_message(str(e))
                 reply[comm_consts.KEY_REPLYTYPE_NPCTALK] = self.sentence_to_json(sentence_to_play, topicInfoID)
                 self.__first_line = False
 
@@ -216,7 +221,12 @@ class GameStateManager:
         # if the player response is not an action command, return a regular player reply type
         if player_spoken_sentence:
             topicInfoID: int = int(input_json.get(comm_consts.KEY_CONTINUECONVERSATION_TOPICINFOFILE,1))
-            self.__game.prepare_sentence_for_game(player_spoken_sentence, self.__talk.context, self.__config, topicInfoID, self.__first_line)
+            try:
+                self.__game.prepare_sentence_for_game(player_spoken_sentence, self.__talk.context, self.__config, topicInfoID, self.__first_line)
+            except VoicelinePreparationError as e:
+                logger.error(str(e))
+                self.__talk.end()
+                return self.error_message(str(e))
             self.__first_line = False
             return {comm_consts.KEY_REPLYTYPE: comm_consts.KEY_REPLYTYPE_NPCTALK, comm_consts.KEY_REPLYTYPE_NPCTALK: self.sentence_to_json(player_spoken_sentence, topicInfoID)}
         else:

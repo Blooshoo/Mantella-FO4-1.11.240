@@ -95,6 +95,10 @@ class TTSable(ABC):
                 os.remove(final_voiceline_file)
             if os.path.exists(final_voiceline_file.replace(".wav", ".lip")):
                 os.remove(final_voiceline_file.replace(".wav", ".lip"))
+            # Also the .fuz (Fallout 4): one left over by an earlier failed rename or an interrupted run would
+            # otherwise be renamed to THIS line's name below whenever this line's fuz generation fails
+            if os.path.exists(final_voiceline_file.replace(".wav", ".fuz")):
+                os.remove(final_voiceline_file.replace(".wav", ".fuz"))
         except:
             logger.warning("Failed to remove spoken voicelines")
 
