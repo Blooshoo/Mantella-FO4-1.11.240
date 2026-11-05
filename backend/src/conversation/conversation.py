@@ -416,6 +416,12 @@ class Conversation:
         if not pending_events:
             return False
 
+        # The response that requested the action can still be finishing (draining the stream, queueing its
+        # terminator) when the game's result arrives: the action-only sentence is queued as soon as the tool call
+        # is parsed. Stop and join it first, or __start_generating_npc_sentences below finds its thread alive and
+        # starts nothing, and that thread's terminator then answers the action result with player_talk
+        self.__stop_generation()
+
         # Add synthetic user message containing just the new in-game events
         player_character = self.__context.npcs_in_conversation.get_player_character()
         player_name = player_character.name if player_character else ""
