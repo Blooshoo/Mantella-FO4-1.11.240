@@ -25,6 +25,11 @@ was taken as given, not reproduced. **Read [the architecture/state machines](doc
   rebuilt** (R-05 is in the compiled core); TopicInfoPatcher is unchanged here but 94163f6 still needs its
   Windows compile. Not done: any Windows build, game run, real LLM/TTS. Kalli's local `evaluate_loaded` guard fix
   is not in Git and untouched here (no overlapping files).
+- Test environment used: uv-managed CPython 3.11.15 (the distro 3.11 lacks tkinter, which `config_value_path.py`
+  imports), `pip install -r tests/requirements-ci.txt -r tests/requirements-test.txt` plus **`setuptools==81.0.0`**
+  (opentelemetry-instrumentation imports `pkg_resources`; requirements-ci does not pin setuptools). The loose
+  `openai>=2.8.0` resolves to 3.46.0; focused + lifecycle tests were also run with the inventory's openai 2.8.0 /
+  pytest 9.1.1: 120 passed both ways. Run with `unshare -rn` and `env -u MANTELLA_OPENCLAW_CONFIG`.
 
 ## Latest independent Topic build and required repairs — frozen ffffcad
 
