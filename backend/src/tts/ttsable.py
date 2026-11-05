@@ -125,7 +125,7 @@ class TTSable(ABC):
             # in stripped characters): a later line overwrote a queued line's files before the game played it, and a
             # later line whose .fuz generation failed inherited the earlier line's .fuz under its own name
             readable_name: str = "".join(c for c in f'{voice} {voiceline.strip()}'[:150] if c not in r'\/:*?"<>|.').strip()
-            new_wav_file_name = f'{self._voiceline_folder}/save/{readable_name} {self._new_voiceline_token()}.wav'
+            new_wav_file_name = f'{self._voiceline_folder}/save/{self._saved_voiceline_stem(readable_name, self._new_voiceline_token())}.wav'
 
             new_lip_file_name = new_wav_file_name.replace(".wav", ".lip")
             new_fuz_file_name = new_wav_file_name.replace(".wav", ".fuz")
@@ -184,6 +184,26 @@ class TTSable(ABC):
     def _new_voiceline_token(self) -> str:
         """A token unique to one synthesis, appended to its saved file names"""
         return uuid.uuid4().hex[:12]
+
+    # Longest file name component (bytes) the file systems this runs on accept: 255 bytes on Linux ext4/btrfs/tmpfs
+    # (NAME_MAX), 255 UTF-16 units on NTFS. A UTF-8 byte count of at most 255 satisfies both (no character takes
+    # fewer UTF-8 bytes than UTF-16 units)
+    MAX_FILE_NAME_BYTES: int = 255
+    SAVED_VOICELINE_EXTENSIONS: tuple[str, ...] = (".wav", ".lip", ".fuz")
+
+    def _saved_voiceline_stem(self, readable_name: str, token: str) -> str:
+        """'<readable name> <token>', with the readable part cut so that the complete file name - token and the
+        longest saved extension included - fits MAX_FILE_NAME_BYTES once UTF-8 encoded.
+
+        The readable part is cut on a character boundary (never inside a multi-byte character), keeping as much
+        of its beginning as fits; the token is always kept whole, so the name stays this synthesis' own. Before, a
+        150-character text of multi-byte characters (or one that was already close to the limit) went over 255
+        bytes once the token was added, and saving the line failed on Linux."""
+        suffix = f' {token}'
+        longest_extension = max(len(ext.encode('utf-8')) for ext in self.SAVED_VOICELINE_EXTENSIONS)
+        budget = self.MAX_FILE_NAME_BYTES - len(suffix.encode('utf-8')) - longest_extension
+        readable = readable_name.encode('utf-8', errors='ignore')[:max(budget, 0)].decode('utf-8', errors='ignore').rstrip()
+        return f'{readable}{suffix}' if readable else token
 
 
     @abstractmethod
