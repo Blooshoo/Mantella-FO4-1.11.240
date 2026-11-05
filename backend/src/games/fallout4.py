@@ -224,7 +224,8 @@ class Fallout4(Gameable):
             except Exception as e:
                 logger.error(f"Could not copy voiceline {fuz_file} to {fuz_filepath}: {e}")
         elif fuz_file:
-            logger.error(f"No .fuz voiceline was created for '{queue_output.text.strip()}' ({fuz_file} is missing). "
+            missing = ", ".join(p for p in (audio_file, fuz_file) if not os.path.exists(p))
+            logger.error(f"No .fuz voiceline was created for '{queue_output.text.strip()}' (missing: {missing}). "
                          "Fallout 4 only plays .fuz files: check the LipFuzer (Creation Kit) or FaceFXWrapper / xWMAEncode / Fuz_extractor setup. "
                          "This line will have no audio.")
         # No new voiceline for this slot: never leave the previous one there
