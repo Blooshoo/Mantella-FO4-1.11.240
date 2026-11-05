@@ -102,6 +102,38 @@ def test_normal_response_still_ends_exactly_once(chat_manager_factory, default_c
     assert queue.get_next_sentence() is None
 
 
+def test_waiting_consumer_returns_when_end_is_declared(monkeypatch):
+    """The consumer waited in queue.get() without ever re-checking is_more_to_come. If the producer's
+    terminator was queued and then cleared before the consumer looked (resume_after_interrupting_action
+    clears the queue without stopping generation), the consumer entered get() with the flag still True and
+    blocked forever once the producer declared the end."""
+    import queue as stdlib_queue
+    import threading
+    from src.llm.sentence import Sentence
+    from src.llm.sentence_content import SentenceContent, SentenceTypeEnum
+
+    waiting = threading.Event()
+
+    class SignallingQueue(stdlib_queue.Queue):
+        def get(self, *a, **kw):
+            waiting.set()  # the consumer is now inside get()
+            return super().get(*a, **kw)
+
+    sq = SentenceQueue()
+    monkeypatch.setattr(sq, "_SentenceQueue__queue", SignallingQueue())
+    sq.is_more_to_come = True
+    sq.put(Sentence(SentenceContent(None, "", SentenceTypeEnum.SPEECH, True), "", 0))  # producer's terminator
+    sq.clear()                                                                      # cleared before it was read
+    box = {}
+    consumer = threading.Thread(target=lambda: box.setdefault("value", sq.get_next_sentence()), daemon=True)
+    consumer.start()
+    assert waiting.wait(5), "consumer never started waiting"
+    sq.is_more_to_come = False                                                      # producer declares the end
+    consumer.join(5)
+    assert not consumer.is_alive(), "consumer kept waiting after the end of the response was declared"
+    assert box["value"] is None
+
+
 def test_terminator_is_queued_before_no_more_to_come(chat_manager_factory, default_config, tmp_path,
                                                      example_characters_pc_to_npc):
     """A consumer that looks at the queue the instant the producer declares 'no more to come' must

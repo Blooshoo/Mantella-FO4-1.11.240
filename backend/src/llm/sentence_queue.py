@@ -24,17 +24,25 @@ class SentenceQueue:
     def is_more_to_come(self, value: bool):
         self.__is_more_to_come = value
 
+    # While waiting, how often to re-check is_more_to_come (a sentence still arrives immediately)
+    _END_RECHECK_S: float = 0.1
+
     @utils.time_it
     def get_next_sentence(self) -> Sentence | None:
         self.log(f"Trying to aquire get_lock to get next sentence")
         with self.__get_lock:
-            if self.__queue.qsize() > 0 or self.__is_more_to_come:
-                retrieved_sentence = self.__queue.get()
+            # Waits while the producer says more is coming, re-checking that flag: a terminator that was
+            # queued and then cleared before this looked (resume_after_interrupting_action clears without
+            # stopping generation) used to leave this blocked in get() forever once the producer declared the end
+            while self.__queue.qsize() > 0 or self.__is_more_to_come:
+                try:
+                    retrieved_sentence = self.__queue.get(timeout=self._END_RECHECK_S)
+                except queue.Empty:
+                    continue
                 self.log(f"Retrieved '{retrieved_sentence.text}'")
                 return retrieved_sentence
-            else:
-                self.log(f"Nothing to get from queue, returning None")
-                return None
+            self.log(f"Nothing to get from queue, returning None")
+            return None
     
     @utils.time_it
     def put(self, new_sentence: Sentence):
