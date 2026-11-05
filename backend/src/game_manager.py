@@ -159,6 +159,13 @@ class GameStateManager:
                 reply: dict[str, Any] = {comm_consts.KEY_REPLYTYPE: replyType}
                 break
 
+        if replyType == comm_consts.KEY_REPLYTYPE_ENDCONVERSATION:
+            # The conversation is over (its goodbye was delivered, or it had already ended): save it now
+            # and drop it, as an end request would, instead of leaving it for the next start
+            self.__talk.end()
+            self.__talk = None
+            return reply
+
         if sentence_to_play:
             if not sentence_to_play.error_message:
                 try:

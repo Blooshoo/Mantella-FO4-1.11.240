@@ -63,6 +63,7 @@ class Conversation:
         self.__rememberer: Remembering = rememberer
         self.__llm_client = llm_client
         self.__has_already_ended: bool = False
+        self.__is_ending: bool = False # the end sequence (goodbye) has been started
         self.__allow_mic_input: bool = True # this flag ensures mic input is disabled on conversation end
         self.__sentences: SentenceQueue = SentenceQueue()
         self.__generation_thread: Thread | None = None
@@ -172,6 +173,12 @@ class Conversation:
             self.last_sentence_start_time = time.time()
             return comm_consts.KEY_REPLYTYPE_NPCTALK, next_sentence
         else:
+            # The end sequence's goodbye has been delivered and the game still asks for a line: end now. The
+            # goodbye carries the end action, but game scripts that read actions as a string array (the public
+            # FO4 scripts) never see this backend's {'identifier': ...} actions and would otherwise be told to
+            # wait for player input in a conversation that already said goodbye
+            if self.__is_ending:
+                return comm_consts.KEY_REPLYTYPE_ENDCONVERSATION, None
             # Check if end conversation was requested via tool call
             if self.__output_manager.end_conversation_requested:
                 self.__output_manager.clear_end_conversation_requested()
@@ -448,7 +455,8 @@ class Conversation:
         """Replaces all remaining sentences with a "goodbye" sentence that also prompts the game to request a stop to the conversation using an action
         """
         if not self.__has_already_ended:
-            config = self.__context.config            
+            self.__is_ending = True
+            config = self.__context.config
             self.__stop_generation()
             self.__sentences.clear()
             if self.__stt:
