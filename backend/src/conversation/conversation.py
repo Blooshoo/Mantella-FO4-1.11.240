@@ -482,10 +482,18 @@ class Conversation:
         
         Args:
             end_timestamp: Optional game timestamp (days passed as float) when conversation ends
+
+        Saves only once: GameStateManager's error path ends a conversation but keeps it, so the next
+        start or an end request ends it again; saving again would append it to every NPC's history twice
+        and summarise it twice (an LLM call). Every call still stops generation.
         """
+        already_ended = self.__has_already_ended
         self.__has_already_ended = True
         self.__stop_generation()
         self.__sentences.clear()
+        if already_ended:
+            logger.debug("Conversation already ended and saved; not saving it again")
+            return
         self.__save_conversation(is_reload=False, end_timestamp=end_timestamp)
     
     @utils.time_it
