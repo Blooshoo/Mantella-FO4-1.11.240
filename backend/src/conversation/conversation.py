@@ -68,6 +68,7 @@ class Conversation:
         self.__final_save_progress: FinalSaveProgress = FinalSaveProgress()
         self.__final_end_timestamp: float | None = None
         self.__is_ending: bool = False # the end sequence (goodbye) has been started
+        self.__end_reply_not_before: float = 0.0 # time.time() before which the end reply would cut the goodbye
         self.__allow_mic_input: bool = True # this flag ensures mic input is disabled on conversation end
         self.__sentences: SentenceQueue = SentenceQueue()
         self.__generation_thread: Thread | None = None
@@ -182,6 +183,11 @@ class Conversation:
             # FO4 scripts) never see this backend's {'identifier': ...} actions and would otherwise be told to
             # wait for player input in a conversation that already said goodbye
             if self.__is_ending:
+                # The goodbye was handed to the game moments ago (the game requests the next line right after Say).
+                # Every other next line is held until the previous one has played (above); the end reply makes the
+                # game clean the conversation up, so it is held as long - by the async HTTP route, after the save
+                # (see end_reply_hold_seconds), not here: this thread must not sit on the save and drop
+                self.__end_reply_not_before = self.last_sentence_start_time + self.last_sentence_audio_length
                 return comm_consts.KEY_REPLYTYPE_ENDCONVERSATION, None
             # Check if end conversation was requested via tool call
             if self.__output_manager.end_conversation_requested:
@@ -480,6 +486,12 @@ class Conversation:
                     goodbye_sentence.actions.append({'identifier': comm_consts.ACTION_ENDCONVERSATION})
                     self.__sentences.put(goodbye_sentence)
                     
+    def end_reply_hold_seconds(self) -> float:
+        """How much longer the goodbye this conversation ended with is still playing (its estimated duration plus
+        wait_time_buffer, the hold applied to every next line), or 0. Only set when the end reply answers the line
+        request that follows the goodbye (action-blind scripts); an end request or an error end has no hold."""
+        return max(0.0, self.__end_reply_not_before - time.time())
+
     @utils.time_it
     def contains_character(self, ref_id: str) -> bool:
         for actor in self.__context.npcs_in_conversation.get_all_characters():

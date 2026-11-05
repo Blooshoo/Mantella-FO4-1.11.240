@@ -46,6 +46,7 @@ class GameStateManager:
         self.__mic_ptt: bool = False # push-to-talk
         self.__stt: Transcriber | None = None
         self.__first_line: bool = True
+        self.__reply_hold_s: float = 0.0 # see pop_reply_hold_seconds
         self.__automatic_greeting: bool = config.automatic_greeting
         self.__conv_has_narrator: bool = config.narration_handling == NarrationHandlingEnum.USE_NARRATOR
         self.__should_reload: bool = False
@@ -111,8 +112,16 @@ class GameStateManager:
         return random_client
         
     
+    def pop_reply_hold_seconds(self) -> float:
+        """Seconds the HTTP layer should wait (without blocking other requests) before sending the reply the last
+        continue_conversation returned, then reset. Non-zero only for an end reply that follows a goodbye still
+        playing, so the game does not clean up the conversation while the goodbye is being spoken."""
+        hold, self.__reply_hold_s = self.__reply_hold_s, 0.0
+        return hold
+
     @utils.time_it
     def continue_conversation(self, input_json: dict[str, Any]) -> dict[str, Any]:
+        self.__reply_hold_s = 0.0
         if(not self.__talk ):
             return self.error_message("No running conversation.")
         
@@ -162,8 +171,11 @@ class GameStateManager:
         if replyType == comm_consts.KEY_REPLYTYPE_ENDCONVERSATION:
             # The conversation is over (its goodbye was delivered, or it had already ended): save it now
             # and drop it, as an end request would, instead of leaving it for the next start
-            self.__talk.end()
+            ending_talk = self.__talk
+            ending_talk.end()
             self.__talk = None
+            # Saved and dropped; only the reply waits for the goodbye's remaining audio (pop_reply_hold_seconds)
+            self.__reply_hold_s = ending_talk.end_reply_hold_seconds()
             return reply
 
         if sentence_to_play:

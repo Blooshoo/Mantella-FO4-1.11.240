@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Any, Hashable
 
@@ -88,6 +89,13 @@ class mantella_route(routeable):
                         reply = self.__game.start_conversation(received_json)
                     case comm_consts.KEY_REQUESTTYPE_CONTINUECONVERSATION:
                         reply = self.__game.continue_conversation(received_json)
+                        # An end reply that follows a goodbye still playing is held until it has played, like
+                        # every next line; awaited, so other requests are served meanwhile (the conversation is
+                        # already saved and dropped)
+                        hold_s = self.__game.pop_reply_hold_seconds()
+                        if hold_s > 0:
+                            logger.debug(f'Holding the end reply {round(hold_s, 1)} seconds for the goodbye to play')
+                            await asyncio.sleep(hold_s)
                     case comm_consts.KEY_REQUESTTYPE_PLAYERINPUT:
                         reply = self.__game.player_input(received_json)
                     case comm_consts.KEY_REQUESTTYPE_ENDCONVERSATION:
