@@ -17,11 +17,18 @@ from queue import Queue
 from threading import Thread, Event
 from src.config.definitions.game_definitions import GameEnum
 import platform
+import uuid
 
 if platform.system() == "Windows":
     from subprocess import STARTUPINFO, STARTF_USESHOWWINDOW
 
 logger = utils.get_logger()
+
+
+class VoicelineProvenanceError(Exception):
+    """A synthesized voiceline could not be proven to belong to the line it was synthesized for: an intermediate
+    left by an earlier synthesis could not be invalidated, or the result could not be saved under its own name.
+    The synthesis fails (a Text-to-Speech error for that line) rather than risk the game voicing an earlier line."""
 
 
 class TTSable(ABC):
@@ -90,17 +97,13 @@ class TTSable(ABC):
         final_voiceline_file_name = 'out' # "out" is the file name used by XTTS
         final_voiceline_file =  f"{self._voiceline_folder}/{final_voiceline_file_name}.wav"
 
-        try:
-            if os.path.exists(final_voiceline_file):
-                os.remove(final_voiceline_file)
-            if os.path.exists(final_voiceline_file.replace(".wav", ".lip")):
-                os.remove(final_voiceline_file.replace(".wav", ".lip"))
-            # Also the .fuz (Fallout 4): one left over by an earlier failed rename or an interrupted run would
-            # otherwise be renamed to THIS line's name below whenever this line's fuz generation fails
-            if os.path.exists(final_voiceline_file.replace(".wav", ".fuz")):
-                os.remove(final_voiceline_file.replace(".wav", ".fuz"))
-        except:
-            logger.warning("Failed to remove spoken voicelines")
+        # Every intermediate a previous synthesis can leave behind must be gone before this one starts: TTS writes
+        # out.wav, lip generation out.lip (FaceFXWrapper also out_r.wav), xWMAEncode out.xwm and LipFuzer /
+        # Fuz_extractor out.fuz. When a step of THIS synthesis fails, a leftover would otherwise be taken for its
+        # output (a stale out.xwm is packed into this line's .fuz; a stale out.fuz is renamed to this line's name)
+        # and the game would voice an earlier line. If one cannot be removed, its provenance cannot be told apart,
+        # so the synthesis fails closed instead of guessing (generate_sentence turns this into a TTS error)
+        self._invalidate_intermediate_voiceline_files(final_voiceline_file)
 
         played_externally = self.tts_synthesize(voiceline, final_voiceline_file, synth_options)
         if not os.path.exists(final_voiceline_file):
@@ -117,43 +120,70 @@ class TTSable(ABC):
             #timestamp: str = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f_")
             #new_wav_file_name = f"{self._voiceline_folder}/save/{timestamp + final_voiceline_file_name}.wav" 
 
-            #Use a sanitized version of the voice text as filename
-            unique_name: str  = f'{voice} {voiceline.strip()}'[:150]
-            new_name: str = "".join(c for c in unique_name if c not in r'\/:*?"<>|.')
-            new_wav_file_name = f'{self._voiceline_folder}/save/{new_name.strip()}.wav'
+            # A sanitized version of the voice text keeps the name readable; the per-synthesis token makes it this
+            # synthesis' own. The text alone collided (same voice + same first 150 characters, or texts differing only
+            # in stripped characters): a later line overwrote a queued line's files before the game played it, and a
+            # later line whose .fuz generation failed inherited the earlier line's .fuz under its own name
+            readable_name: str = "".join(c for c in f'{voice} {voiceline.strip()}'[:150] if c not in r'\/:*?"<>|.').strip()
+            new_wav_file_name = f'{self._voiceline_folder}/save/{readable_name} {self._new_voiceline_token()}.wav'
 
             new_lip_file_name = new_wav_file_name.replace(".wav", ".lip")
             new_fuz_file_name = new_wav_file_name.replace(".wav", ".fuz")
-
-            if os.path.exists(new_wav_file_name):       #Repeated phrase, delete previous file
-                os.remove(new_wav_file_name)
+            for saved_file in (new_wav_file_name, new_lip_file_name, new_fuz_file_name):
+                if os.path.lexists(saved_file):
+                    raise VoicelineProvenanceError(f'{saved_file} already exists; refusing to reuse a voiceline file of another synthesis')
 
             try:
                 os.rename(final_voiceline_file, new_wav_file_name)
             except Exception as ex:
-                logger.warning(f'{type(ex).__name__}: {ex.args}')
+                # Never hand back a name with no file behind it, nor out.wav (the next synthesis removes it first)
+                raise VoicelineProvenanceError(f'Could not save the synthesized voiceline {final_voiceline_file} ({type(ex).__name__}: {ex})') from ex
 
             if (self._lip_generation_enabled == 'enabled') or (self._lip_generation_enabled == 'lazy' and not synth_options.is_first_line_of_response):
                 try:
-                    if os.path.exists(new_lip_file_name):
-                        os.remove(new_lip_file_name)
                     os.rename(final_voiceline_file.replace(".wav", ".lip"), new_lip_file_name)
                 except:
                     logger.error(f'Could not rename {final_voiceline_file.replace(".wav", ".lip")}')
             try:
                 fuz_file_name = final_voiceline_file.replace(".wav", ".fuz")
                 if (os.path.exists(fuz_file_name)):
-                    if os.path.exists(new_fuz_file_name):
-                        os.remove(new_fuz_file_name)
+                    # out.fuz can only be this synthesis' output (intermediates were invalidated above). If the rename
+                    # fails, this line simply has no .fuz under its fresh name: the game gets no audio, not an old line
                     os.rename(fuz_file_name, new_fuz_file_name)
             except:
-                logger.error(f'Could not rename {final_voiceline_file.replace(".wav", ".fuz")}')
+                logger.error(f'Could not rename {final_voiceline_file.replace(".wav", ".fuz")}; this line will have no audio in Fallout 4')
             final_voiceline_file = new_wav_file_name
 
         # if Debug Mode is on, play the audio file
         # if (self.debug_mode == '1') & (self.play_audio_from_script == '1'):
         #     winsound.PlaySound(final_voiceline_file, winsound.SND_FILENAME)
         return final_voiceline_file, played_externally
+
+
+    INTERMEDIATE_VOICELINE_SUFFIXES: tuple[str, ...] = (".wav", ".lip", ".fuz", ".xwm", "_r.wav")
+
+    def _invalidate_intermediate_voiceline_files(self, final_voiceline_file: str):
+        """Removes every intermediate a previous synthesis may have left next to final_voiceline_file (out.wav).
+
+        Raises:
+            VoicelineProvenanceError: an intermediate exists and cannot be removed, so this synthesis' outputs
+                could not be told apart from an earlier line's
+        """
+        base = final_voiceline_file[:-len(".wav")]
+        for suffix in self.INTERMEDIATE_VOICELINE_SUFFIXES:
+            path = base + suffix
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                raise VoicelineProvenanceError(
+                    f'{path} is left over from an earlier voiceline and cannot be removed ({type(e).__name__}); '
+                    'not risking playing that earlier line. Close any program using it, or restart MantellaSoftware.') from e
+
+    def _new_voiceline_token(self) -> str:
+        """A token unique to one synthesis, appended to its saved file names"""
+        return uuid.uuid4().hex[:12]
 
 
     @abstractmethod
