@@ -3,6 +3,17 @@
 ## Safety and acceptance boundary
 **Windows-target compiled locally / NOT game-tested / NOT runtime accepted.** Frozen HTTP build: 2d82a3b; frozen Topic build: ffffcad. See the latest evidence below; historical source-only notes remain for chronology. No live Gateway access, API key, game install or vendor binaries are needed for review/unit tests. Do not start cloud jobs or paid services automatically. Do not copy build outputs to a game/MO2 tree, enable mods, launch a game, change Gateway configuration, or connect to real LLMs. Use tool-less/mock transport only. Private hosting is intentional; preserve upstream license notices.
 
+## Lifecycle repair candidate (cloud, 2026-11-05) — branch `claude/mantella-lifecycle-audio-fixes-jikc06`
+Based on exact commit 32b05c6 (`claude/practical-goodall-abxw3m`); backend only, no native/Papyrus/build file touched.
+**Read [the repair report](docs/conversation-reliability/LIFECYCLE-REPAIR-2026-11-05.md).** Fixed, each with
+real-code regressions run red on its parent: R-03b stale audio from saved-voiceline name collisions and failed
+intermediate invalidation (0c122d2); R-04b a failed first save was never retried (f9844f0); R-07 an action result
+arriving while its response finished was never answered (a14d574). Documented, not fixed: goodbye end reply
+precedes the goodbye's audio (O-10, needs in-game check), xVASynth phrase-file staleness (O-11), persistent save
+failure blocks the next start (O-12, as before R-04). The local legacy 0.13.0 adapter and the local guard-reset
+native repair are not in Git and were not reviewed or touched. Not done: Windows build, PSC/PEX verification, game
+run, real LLM/TTS. Repair candidate for independent review, not deployment approval.
+
 ## Conversation-reliability review (cloud, 2026-11-05) — branch `claude/practical-goodall-abxw3m`
 Starting commit **94163f6** (`ccr-a959bf09-5dtmxx`; `main` holds only the 17b6d33 snapshot). Owner-reported
 local evidence (both DLLs load on 1.11.240 under Proton, guards pass, Papyrus registered, GameDataReady seen)

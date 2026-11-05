@@ -40,6 +40,19 @@ re-checking the flag, so a terminator queued and then cleared before the consume
 consumer now waits in 0.1 s slices and returns once the end is declared
 (`test_waiting_consumer_returns_when_end_is_declared`, deterministic; fails on the original queue too).
 
+## Follow-up after the independent review (branch `claude/mantella-lifecycle-audio-fixes-jikc06`)
+
+Details, regressions and base/branch counts: [LIFECYCLE-REPAIR-2026-11-05.md](LIFECYCLE-REPAIR-2026-11-05.md).
+
+| ID | Sev. | Defect (at 32b05c6) | Status |
+|---|---|---|---|
+| **R-03b** | High (wrong audio) | saved voiceline names derived from voice + first 150 chars collided across requests/within a response (inherited or overwritten `.fuz`); failed invalidation of `out.*` only logged; `out.xwm` never invalidated | fixed 0c122d2: per-synthesis names, fail closed on invalidation/save failure |
+| **R-04b** | Medium (lost memory) | R-04's guard made a failed first save permanent: never retried | fixed f9844f0: saved-once guard + `FinalSaveProgress`, retry writes only missing records |
+| **R-07** | Medium (no reply) | action result arriving while the requesting response finished: continuation silently not started, `player_talk` | fixed a14d574: stop + join pre-action generation first |
+| O-10 | open | goodbye: end reply ~1 ms after a goodbye line (other lines are held for their duration); audio cut depends on the installed script's `CleanupConversation` | documented, needs in-game check |
+| O-11 | open | xVASynth multi-phrase files are never invalidated and merge errors are swallowed: a failed batch can merge an older phrase | documented, not fixed |
+| O-12 | open | a save that fails every time also fails the next start (as before R-04); history file rewritten in place (truncation on a mid-write failure) | documented |
+
 ## Native lifetimes and thread requirements (reviewed, not changed)
 * F4SE_HTTP240: natives run on Papyrus VM threads and only copy strings/arrays in and out
   (`contract.h`); completions run on dispatcher threads and touch only the mutex-guarded store/queue, never
