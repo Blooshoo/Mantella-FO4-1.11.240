@@ -41,6 +41,12 @@ namespace f4sehttp240 {
 inline constexpr int kNoReply = -1;
 inline constexpr int kErrorOffset = 100000;
 inline constexpr const char* kErrorKey = "f4se_http_error";  // upstream "F4SE_HTTP_error", lowercased by its own import
+// The official Mantella FO4 scripts read an error reply with getString(h, MantellaConstants.HTTP_ERROR, "error"),
+// HTTP_ERROR = "SKSE_HTTP_error" (public sources YetAnotherModder/fallout-4-mantella-mod b9d7298 and
+// art-from-the-machine/fallout-4-mantella-mod 15f9b13: MantellaConstants.psc:7, MantellaConversation.psc
+// OnHttpErrorReceived). Keys are lowercased, so every error message is stored under both names; with only
+// kErrorKey the scripts showed "Error: Could not retrieve error" and the reason was lost (cloud review R-05).
+inline constexpr const char* kScriptErrorKey = "skse_http_error";
 inline constexpr const char* kRequestTypeKey = "mantella_request_type";          // MantellaConstants KEY_REQUESTTYPE
 inline constexpr const char* kStartConversation = "mantella_start_conversation";  // KEY_REQUESTTYPE_STARTCONVERSATION
 
@@ -217,6 +223,7 @@ private:
 		int h = store_.create(/*for_error=*/true);
 		if (h <= 0) return;
 		store_.set_error(h, kErrorKey, msg);
+		store_.set_error(h, kScriptErrorKey, msg);  // the name the official scripts read (see kScriptErrorKey)
 		queue_.push_error(h);
 	}
 

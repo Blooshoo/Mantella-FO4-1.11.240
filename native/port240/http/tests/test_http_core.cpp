@@ -380,6 +380,40 @@ static void test_store_threads() {
 	CHECK(s.size() <= 5000);
 }
 
+// R-05 (cloud review 2026-11-05): the official Mantella FO4 scripts read an error reply with
+// getString(h, MantellaConstants.HTTP_ERROR, "error") where HTTP_ERROR = "SKSE_HTTP_error" (public script
+// sources YetAnotherModder/fallout-4-mantella-mod b9d7298 and art-from-the-machine/fallout-4-mantella-mod
+// 15f9b13: MantellaConstants.psc line 7, MantellaConversation.psc OnHttpErrorReceived). Upstream cdff839
+// stores "F4SE_HTTP_error". Only one name used to be written, so every error the scripts saw read
+// "Error: Could not retrieve error": the reason (MantellaSoftware not running, HTTP 500, timeout,
+// saturation, ...) was lost in-game.
+static void test_error_reply_readable_by_official_scripts() {
+	DictStore s;
+	ReplyQueue rq;
+	HttpCore core(s, rq);
+	const std::string why = "request failed (WinHTTP error 12029)";  // e.g. MantellaSoftware not running
+	core.complete(0, "", why);
+	int g = core.get_handle();
+	CHECK(g > kErrorOffset);
+	CHECK(s.get_string(g - kErrorOffset, "SKSE_HTTP_error", "error") == why);  // exactly as the official script asks
+	CHECK(s.get_string(g - kErrorOffset, "F4SE_HTTP_error", "error") == why);  // upstream name (kErrorKey)
+	CHECK(s.get_string(g - kErrorOffset, kErrorKey, "") == why);
+	// every error source goes through the same path: bad route, unknown handle, invalid JSON, HTTP status
+	CHECK(!core.prepare(4242, 4999, "mantella", 0));
+	g = core.get_handle();
+	CHECK(g > kErrorOffset && s.get_string(g - kErrorOffset, "SKSE_HTTP_error", "").find("unknown dictionary handle") != std::string::npos);
+	core.complete(500, "Internal Server Error", "");
+	g = core.get_handle();
+	CHECK(g > kErrorOffset && s.get_string(g - kErrorOffset, "SKSE_HTTP_error", "") == "HTTP status 500");
+	core.complete(200, "not json", "");
+	g = core.get_handle();
+	CHECK(g > kErrorOffset && s.get_string(g - kErrorOffset, "SKSE_HTTP_error", "").find("invalid JSON reply") != std::string::npos);
+	// a normal reply is not an error dictionary
+	core.complete(200, R"({"mantella_reply_type":"mantella_npc_talk"})", "");
+	g = core.get_handle();
+	CHECK(g > 0 && g < kErrorOffset && !s.has_key(g, "SKSE_HTTP_error"));
+}
+
 // ------------------------------------------------------------------------------- queue + request
 static void test_queue_and_core() {
 	ReplyQueue q(3);
@@ -511,6 +545,7 @@ int main() {
 	test_concurrent_starts_atomic_epoch();
 	test_store_json_bridge();
 	test_store_threads();
+	test_error_reply_readable_by_official_scripts();
 	test_queue_and_core();
 	test_contract(std::getenv("F4SEHTTP240_OFFICIAL_PSC"), std::getenv("F4SEHTTP240_UPSTREAM_PSC"));
 	std::printf("test_http_core: %d checks, %d failures\n", checks, failures);

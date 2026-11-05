@@ -49,7 +49,10 @@ See `contract.h`. Strings and arrays are copied in and returned by value; libxse
 ## Upstream defects fixed in the core (each has a test)
 D1 type confusion in getters (UB/crash) · D2 unlocked map shared by HTTP and Papyrus threads · D3 handle
 space collides with the official `+100000` error encoding and grows without bound · D4 unbounded recursion on
-nested-dictionary cycles / deep JSON · D5 `hasKey` not lowercasing. Also: invalid route/port, bad JSON and
+nested-dictionary cycles / deep JSON · D5 `hasKey` not lowercasing · R-05 (cloud review 2026-11-05) error replies
+carry the message under `skse_http_error` as well as upstream's `f4se_http_error`: the official scripts read
+`MantellaConstants.HTTP_ERROR = "SKSE_HTTP_error"` (public script sources), so with one name every failure showed
+"Error: Could not retrieve error". Also: invalid route/port, bad JSON and
 HTTP errors now produce an error reply instead of silence (the scripts otherwise wait for their timeout).
 
 Sol adversarial review 2026-11-03 fixes (each has a test; see `reports/Mantella-240-sol-remediation-2026-11-03.md`):
