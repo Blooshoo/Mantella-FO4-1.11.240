@@ -288,6 +288,14 @@ class ChatManager:
     def generate_response(self, messages: message_thread, characters: Characters, blocking_queue: SentenceQueue, actions: list[Action], tools: list[dict] | None, game: Gameable | None = None):
         """Starts generating responses by the LLM for the current state of the input messages
 
+        Runs on the conversation's generation thread. Conversation sets ``blocking_queue.is_more_to_come``
+        before starting it, and the HTTP handler then blocks in ``SentenceQueue.get_next_sentence`` (on
+        the server's only event-loop thread) until a sentence arrives or ``is_more_to_come`` is False.
+        So this always ends the response, however generation stops: when ``process_response`` did not
+        get to end it (no NPC to answer, or an exception escaped it) an error sentence is queued, which
+        the waiting request turns into an error reply, and ``is_generating`` is always cleared so
+        ``stop_generation`` cannot spin forever.
+
         Args:
             messages (message_thread): _description_
             characters (Characters): _description_
@@ -295,11 +303,27 @@ class ChatManager:
             actions (list[Action]): _description_
             game (Gameable | None): The game instance for resolving action parameters (optional)
         """
-        if(not characters.last_added_character):
-            return
         self.__is_generating = True
-        
-        asyncio.run(self.process_response(characters.last_added_character, blocking_queue, messages, characters, actions, tools, game))
+        failure: str | None = None
+        try:
+            if not characters.last_added_character:
+                failure = "Mantella could not respond: no NPC is loaded for this conversation. See MantellaSoftware's log."
+                logger.error(failure)
+                return
+            asyncio.run(self.process_response(characters.last_added_character, blocking_queue, messages, characters, actions, tools, game))
+        except Exception as e:
+            failure = "Mantella could not generate a response. See MantellaSoftware's log."
+            logger.error(f"Response generation failed: {e}", exc_info=True)
+        finally:
+            if blocking_queue.is_more_to_come:  # process_response did not end this response
+                if failure is None:
+                    failure = "Mantella could not generate a response. See MantellaSoftware's log."
+                # Queued before is_more_to_come goes False, so a waiting consumer always receives it.
+                # Non-empty text + error_message: continue_conversation answers with an error reply.
+                error_content = SentenceContent(characters.last_added_character, " ", SentenceTypeEnum.SPEECH, True)
+                blocking_queue.put(Sentence(error_content, "", 0, failure))
+                blocking_queue.is_more_to_come = False
+            self.__is_generating = False
     
     @utils.time_it
     def stop_generation(self):
@@ -373,7 +397,10 @@ class ChatManager:
                 for i in indicators:
                     cut_indicators.add(i)
             accumulator: sentence_accumulator = sentence_accumulator(list(cut_indicators))
-        
+            # Bound before the try: the finally below logs with it, also when resolving the client fails
+            # (it used to raise UnboundLocalError there and skip ending the response)
+            active_client: AIClient = self.__client
+
             try:
                 current_sentence: str = ''
                 settings: sentence_generation_settings = sentence_generation_settings(active_character)
@@ -585,8 +612,10 @@ class ChatManager:
                         new_sentence = self.generate_sentence(pending_sentence)
                         blocking_queue.put(new_sentence)
                 logger.log(23, f"Full raw response ({active_client.get_count_tokens(raw_response)} tokens): {raw_response.strip()}")
-                blocking_queue.is_more_to_come = False
                 # This sentence is required to make sure there is one in case the game is already waiting for it
-                # before the ChatManager realises there is not another message coming from the LLM
+                # before the ChatManager realises there is not another message coming from the LLM.
+                # Queued BEFORE is_more_to_come goes False: a consumer checking in between would otherwise get None
+                # (end of response) and leave this sentinel behind, read as a second end of response next turn
                 blocking_queue.put(Sentence(SentenceContent(active_character,"",SentenceTypeEnum.SPEECH, True),"",0))
+                blocking_queue.is_more_to_come = False
                 self.__is_generating = False
