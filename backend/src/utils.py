@@ -6,7 +6,6 @@ import sys
 import os
 import threading
 from shutil import rmtree
-import wave
 from charset_normalizer import detect
 import platform
 from pathlib import Path
@@ -146,16 +145,57 @@ def get_file_encoding(file_path) -> str | None:
         return None
     
 
-@time_it
-def get_audio_duration(audio_file: str):
-    """Used to estimate when an external software has finished playing the audio file"""
-    with wave.open(audio_file, 'r') as wf:
-        frames = wf.getnframes()
-        rate = wf.getframerate()
+# WAVE format tags whose data chunk is fixed-size frames (PCM, IEEE float, A-law, mu-law, extensible)
+_FRAME_BASED_WAVE_FORMATS = {0x0001, 0x0003, 0x0006, 0x0007, 0xFFFE}
+_WAVE_SIZE_UNKNOWN = {0, 0xFFFFFFFF}  # what streaming writers put in the data size when the length is unknown
 
-    # wait `buffer` seconds longer to let processes finish running correctly
-    duration = frames / float(rate)
-    return duration
+
+@time_it
+def get_audio_duration(audio_file: str) -> float:
+    """Used to estimate when an external software has finished playing the audio file
+
+    Returns the duration of the audio actually present in a RIFF/WAVE file. It paces the conversation (the
+    next line waits this long) and is sent to the game, so it must never exceed the bytes that exist: a
+    streamed TTS response declares an unknown size (0xFFFFFFFF, read as ~24.8 hours at 24 kHz mono 16-bit,
+    or 0) and a truncated file claims more data than it holds. Only the fmt chunk's sample rate and block
+    alignment are used, so float and WAVE_FORMAT_EXTENSIBLE files work too (Python 3.11's wave rejects them).
+
+    Raises:
+        OSError: the file cannot be read
+        ValueError: not a RIFF/WAVE file with a usable fmt chunk followed by a data chunk
+    """
+    with open(audio_file, 'rb') as f:
+        file_size = os.fstat(f.fileno()).st_size
+        riff = f.read(12)
+        if len(riff) < 12 or riff[0:4] != b'RIFF' or riff[8:12] != b'WAVE':
+            raise ValueError('not a RIFF/WAVE file')
+        sample_rate = block_align = 0
+        while True:
+            header = f.read(8)
+            if len(header) < 8:
+                raise ValueError('no data chunk')
+            chunk_id = header[0:4]
+            chunk_size = int.from_bytes(header[4:8], 'little')
+            if chunk_id == b'fmt ':
+                fmt = f.read(min(chunk_size, 40))  # never trust the size for the read itself
+                if chunk_size < 16 or len(fmt) < 16:
+                    raise ValueError('invalid fmt chunk')
+                format_tag = int.from_bytes(fmt[0:2], 'little')
+                if format_tag not in _FRAME_BASED_WAVE_FORMATS:
+                    raise ValueError(f'unsupported WAVE format 0x{format_tag:04X}')
+                sample_rate = int.from_bytes(fmt[4:8], 'little')
+                block_align = int.from_bytes(fmt[12:14], 'little')
+                if sample_rate <= 0 or block_align <= 0:
+                    raise ValueError('fmt chunk has no sample rate or block alignment')
+                f.seek(chunk_size - len(fmt) + (chunk_size % 2), os.SEEK_CUR)
+            elif chunk_id == b'data':
+                if not sample_rate:
+                    raise ValueError('data chunk before fmt chunk')
+                present = max(0, file_size - f.tell())
+                declared = present if chunk_size in _WAVE_SIZE_UNKNOWN else chunk_size
+                return (min(declared, present) // block_align) / sample_rate
+            else:
+                f.seek(chunk_size + (chunk_size % 2), os.SEEK_CUR)
 
 
 def get_tmp_dir() -> str:

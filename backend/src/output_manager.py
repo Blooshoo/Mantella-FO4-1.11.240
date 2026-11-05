@@ -273,8 +273,18 @@ class ChatManager:
                 error_text = f"Text-to-Speech Error: {e}"
                 logger.log(29, error_text)
                 return Sentence(SentenceContent(character_to_talk, text, content.sentence_type, True), "", 0, error_text)
+            # Measured inside the TTS error handling: an unreadable file used to raise from here, which the
+            # LLM retry path then hit again and process_response's finally a third time, skipping the end of
+            # the response (the waiting request and the whole server then blocked forever)
+            try:
+                duration = utils.get_audio_duration(audio_file)
+            except Exception as e:
+                utils.play_error_sound()
+                logger.log(29, f"Text-to-Speech Error: the synthesized voiceline '{audio_file}' cannot be read: {e}")
+                error_text = f"Text-to-Speech Error: the synthesized voiceline cannot be read ({type(e).__name__}). See MantellaSoftware's log."
+                return Sentence(SentenceContent(character_to_talk, text, content.sentence_type, True), "", 0, error_text)
             self.__is_first_sentence = False
-            return Sentence(SentenceContent(character_to_talk, text, content.sentence_type, content.is_system_generated_sentence, content.actions), audio_file, utils.get_audio_duration(audio_file), played_externally=played_externally, synthesis_start_time=synthesis_start_time)
+            return Sentence(SentenceContent(character_to_talk, text, content.sentence_type, content.is_system_generated_sentence, content.actions), audio_file, duration, played_externally=played_externally, synthesis_start_time=synthesis_start_time)
 
     def __should_stream_first_line(self) -> bool:
         """Whether the next synthesized voiceline should be streamed from the TTS server and played externally as it arrives (Streamed Fast Response)"""
