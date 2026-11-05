@@ -13,6 +13,7 @@ from src.llm.messages import UserMessage, AssistantMessage
 from src.characters_manager import Characters
 from src.character_manager import Character, get_genders_text, get_races_text, get_genders_and_races_text
 from src.remember.remembering import FinalSaveProgress, Remembering
+from src.atomic_file import PublicationAttempt, write_text_atomically
 from src import utils
 
 logger = utils.get_logger()
@@ -136,21 +137,25 @@ class Summaries(Remembering):
             # Write the same summary to all NPCs who heard the same messages
             for npc_name in npc_names:
                 npc_summaries[npc_name] = summary
-                if progress is not None and npc_name in progress.summaries_written:
-                    continue
                 if summary or is_reload:
                     character = next(c for c in npcs_to_summarize if c.name == npc_name)
+                    if progress is not None and npc_name in progress.summaries_written:
+                        # Written by an earlier attempt; only a rollover that attempt could not finish is redone
+                        self.__roll_over_if_full(character.name, character.ref_id, world_id, player_name, character.gender, character.race, progress)
+                        continue
                     on_written = (lambda name=npc_name: progress.summaries_written.add(name)) if progress is not None else None
-                    self.__append_new_conversation_summary(summary, character.name, character.ref_id, world_id, player_name, npc_gender=character.gender, npc_race=character.race, on_written=on_written)
+                    attempt = PublicationAttempt(progress.publications, ("summary", npc_name)) if progress is not None else None
+                    self.__append_new_conversation_summary(summary, character.name, character.ref_id, world_id, player_name, npc_gender=character.gender, npc_race=character.race, on_written=on_written, attempt=attempt, progress=progress)
 
         # Handle pending shares: write summary with prefix to recipient folders
         if pending_shares:
             for sharer_name, recipient_name, recipient_ref_id in pending_shares:
                 share_key = (sharer_name, recipient_name, recipient_ref_id)
-                if progress is not None and share_key in progress.shares_written:
-                    continue
                 sharer_summary = npc_summaries.get(sharer_name, '')
                 if not sharer_summary:
+                    continue
+                if progress is not None and share_key in progress.shares_written:
+                    self.__roll_over_if_full(recipient_name, recipient_ref_id, world_id, player_name, "", "", progress)
                     continue
 
                 # Build participant names list, excluding the sharer and annotating the player
@@ -170,7 +175,8 @@ class Summaries(Remembering):
 
                 # Write to recipient using name and ref_id directly
                 on_written = (lambda key=share_key: progress.shares_written.add(key)) if progress is not None else None
-                self.__append_new_conversation_summary(prefixed_summary, recipient_name, recipient_ref_id, world_id, player_name, on_written=on_written)
+                attempt = PublicationAttempt(progress.publications, ("share", share_key)) if progress is not None else None
+                self.__append_new_conversation_summary(prefixed_summary, recipient_name, recipient_ref_id, world_id, player_name, on_written=on_written, attempt=attempt, progress=progress)
                 logger.info(f"Shared conversation summary with {recipient_name}")
 
     @utils.time_it
@@ -332,37 +338,62 @@ class Summaries(Remembering):
         return ""
 
     @utils.time_it
-    def __append_new_conversation_summary(self, new_summary: str, npc_name: str, npc_ref_id: str, world_id: str, player_name: str = "the player", npc_gender: str = "", npc_race: str = "", on_written: Callable[[], None] | None = None):
-        """Append a new conversation summary.
+    def __append_new_conversation_summary(self, new_summary: str, npc_name: str, npc_ref_id: str, world_id: str, player_name: str = "the player", npc_gender: str = "", npc_race: str = "", on_written: Callable[[], None] | None = None, attempt: PublicationAttempt | None = None, progress: FinalSaveProgress | None = None):
+        """Append a new conversation summary, then roll the file over if it has become too long.
 
+        The summary file is replaced atomically (src/atomic_file.py): a failure at any point leaves the previous
+        summaries intact - before, a failed in-place rewrite truncated them and a retry appended to the fragment.
+        attempt (final save): an earlier attempt whose write landed although it raised is recognised from the
+        file, and the summary is not appended a second time.
         on_written is called as soon as the summary is in the file (before any re-summarising of the whole file,
-        which can still fail), so a retried final save does not append it a second time."""
+        which can still fail; the retry redoes only that), so a retried final save does not append it again."""
         conversation_summary_file = self.__get_latest_conversation_summary_file_path(npc_name, npc_ref_id, world_id)
-        if os.path.exists(conversation_summary_file):
-            with open(conversation_summary_file, 'r', encoding='utf-8') as f:
-                previous_conversation_summaries = f.read()
-        else:
-            directory = os.path.dirname(conversation_summary_file)
-            os.makedirs(directory, exist_ok=True)
-            previous_conversation_summaries = ''
-       
-        if len(new_summary) > 0:
-            logger.info(f"Saving conversation summary for {npc_name} to: {conversation_summary_file}")
+        if not os.path.exists(conversation_summary_file):
+            os.makedirs(os.path.dirname(conversation_summary_file), exist_ok=True)
+        if attempt is not None and len(new_summary) > 0 and attempt.is_committed(conversation_summary_file, open):
+            logger.info(f"Conversation summary for {npc_name} was already saved by the previous attempt: {conversation_summary_file}")
+        elif len(new_summary) > 0:
+            if os.path.exists(conversation_summary_file):
+                with open(conversation_summary_file, 'r', encoding='utf-8') as f:
+                    previous_conversation_summaries = f.read()
+            else:
+                previous_conversation_summaries = ''
 
+            logger.info(f"Saving conversation summary for {npc_name} to: {conversation_summary_file}")
             conversation_summaries = previous_conversation_summaries + new_summary
-            with open(conversation_summary_file, 'w', encoding='utf-8') as f:
-                f.write(conversation_summaries)
-        else:
-            conversation_summaries = previous_conversation_summaries
+            if attempt is not None:
+                attempt.publish(conversation_summary_file, conversation_summaries, open)
+            else:
+                write_text_atomically(conversation_summary_file, conversation_summaries, open)
         if on_written:
             on_written()
+
+        self.__roll_over_if_full(npc_name, npc_ref_id, world_id, player_name, npc_gender, npc_race, progress)
+
+    def __roll_over_if_full(self, npc_name: str, npc_ref_id: str, world_id: str, player_name: str, npc_gender: str, npc_race: str, progress: FinalSaveProgress | None = None):
+        """If the latest summary file exceeds the summary token limit, start the next file with a re-summary of it.
+
+        The next file is the one every later prompt reads as the NPC's memory, so it is only published complete
+        and non-empty: it is written atomically, and an empty re-summary (summarize_conversation returns '' when the
+        LLM gives nothing) keeps the current file instead. Before, a failed write left an empty newest file, and a
+        retry that skipped the already-written NPC committed that empty memory. Safe to call again: once rolled
+        over, the latest file is the short re-summary."""
+        conversation_summary_file = self.__get_latest_conversation_summary_file_path(npc_name, npc_ref_id, world_id)
+        if not os.path.exists(conversation_summary_file):
+            return
+        with open(conversation_summary_file, 'r', encoding='utf-8') as f:
+            conversation_summaries = f.read()
 
         summary_limit = int(self.__client.token_limit * self.__summary_limit_pct)
 
         count_tokens_summaries = self.__client.get_count_tokens(conversation_summaries)
         # if summaries token limit is reached, summarize the summaries
-        if count_tokens_summaries > summary_limit:
-            logger.info(f'Token limit of conversation summaries reached ({count_tokens_summaries} / {summary_limit} tokens). Creating new summary file...')
+        if count_tokens_summaries <= summary_limit:
+            return
+        logger.info(f'Token limit of conversation summaries reached ({count_tokens_summaries} / {summary_limit} tokens). Creating new summary file...')
+        if progress is not None and conversation_summary_file in progress.resummaries:
+            long_conversation_summary = progress.resummaries[conversation_summary_file]
+        else:
             while True:
                 try:
                     prompt = self.__resummarize_prompt.format(
@@ -379,16 +410,21 @@ class Summaries(Remembering):
                     logger.error('Failed to summarize conversation. Retrying...')
                     time.sleep(5)
                     continue
+            if progress is not None:
+                progress.resummaries[conversation_summary_file] = long_conversation_summary
 
-            # Split the file path and increment the number by 1
-            base_directory, filename = os.path.split(conversation_summary_file)
-            file_prefix, old_number = filename.rsplit('_', 1)
-            old_number = os.path.splitext(old_number)[0]
-            new_number = int(old_number) + 1
-            new_conversation_summary_file = os.path.join(base_directory, f"{file_prefix}_{new_number}.txt")
+        if not long_conversation_summary.strip():
+            logger.error(f'Re-summarising the summaries of {npc_name} returned nothing; keeping {conversation_summary_file} as the latest summary file')
+            return
 
-            with open(new_conversation_summary_file, 'w', encoding='utf-8') as f:
-                f.write(long_conversation_summary)
+        # Split the file path and increment the number by 1
+        base_directory, filename = os.path.split(conversation_summary_file)
+        file_prefix, old_number = filename.rsplit('_', 1)
+        old_number = os.path.splitext(old_number)[0]
+        new_number = int(old_number) + 1
+        new_conversation_summary_file = os.path.join(base_directory, f"{file_prefix}_{new_number}.txt")
+
+        write_text_atomically(new_conversation_summary_file, long_conversation_summary, open)
 
     @utils.time_it
     def __format_timestamp(self, game_days: float) -> str:

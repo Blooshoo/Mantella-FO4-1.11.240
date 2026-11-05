@@ -5,6 +5,7 @@ import sys
 import src.utils as utils
 from src.character_manager import Character
 from openai.types.chat import ChatCompletionMessageParam
+from src.atomic_file import PublicationAttempt, write_text_atomically
 
 
 class conversation_log:
@@ -12,12 +13,18 @@ class conversation_log:
 
     @staticmethod
     @utils.time_it
-    def save_conversation_log(character: Character, messages: list[ChatCompletionMessageParam], world_id: str):
-        # save conversation history
+    def save_conversation_log(character: Character, messages: list[ChatCompletionMessageParam], world_id: str, attempt: PublicationAttempt | None = None):
+        """Append this conversation to the NPC's history file.
+
+        The file is replaced atomically (src/atomic_file.py): a failure at any point leaves the previous history
+        intact, never a truncated file. attempt (final save): if an earlier attempt's history already landed
+        (its write raised after the replace), it is not appended a second time."""
 
         if len(messages) > 0:
             # if this is not the first conversation
             conversation_history_file = conversation_log.__get_path_to_conversation_history_file(character, world_id)
+            if attempt is not None and attempt.is_committed(conversation_history_file, open):
+                return
             # transformed_messages = messages.transform_to_openai_messages(messages.get_talk_only())
             if os.path.exists(conversation_history_file):
                 with open(conversation_history_file, 'r', encoding='utf-8') as f:
@@ -31,8 +38,11 @@ class conversation_log:
                 os.makedirs(directory, exist_ok=True)
                 conversation_history = [messages] # wrap the first conversation in a list
             
-            with open(conversation_history_file, 'w', encoding='utf-8') as f:
-                json.dump(conversation_history, f, indent=4) # save everything except the initial system prompt
+            new_content = json.dumps(conversation_history, indent=4) # save everything except the initial system prompt
+            if attempt is not None:
+                attempt.publish(conversation_history_file, new_content, open)
+            else:
+                write_text_atomically(conversation_history_file, new_content, open)
 
     @staticmethod   
     @utils.time_it 

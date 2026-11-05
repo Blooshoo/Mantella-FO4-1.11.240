@@ -12,6 +12,7 @@ from src.conversation.action import Action
 from src.llm.sentence_queue import SentenceQueue
 from src.llm.sentence import Sentence
 from src.remember.remembering import FinalSaveProgress, Remembering
+from src.atomic_file import PublicationAttempt
 from src.output_manager import ChatManager
 from src.llm.messages import AssistantMessage, SystemMessage, UserMessage
 from src.conversation.context import Context
@@ -573,7 +574,8 @@ class Conversation:
             log_key = f"{npc.name}\x00{npc.ref_id}"
             if progress is not None and log_key in progress.logs_written:
                 continue
-            conversation_log.save_conversation_log(npc, self.__messages.transform_to_openai_messages(self.__messages.get_talk_only()), self.__context.world_id)
+            attempt = PublicationAttempt(progress.publications, ("log", log_key)) if progress is not None else None
+            conversation_log.save_conversation_log(npc, self.__messages.transform_to_openai_messages(self.__messages.get_talk_only()), self.__context.world_id, attempt=attempt)
             if progress is not None:
                 progress.logs_written.add(log_key)
         

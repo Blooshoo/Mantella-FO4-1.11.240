@@ -12,13 +12,21 @@ class FinalSaveProgress:
     A final save writes several records (each NPC's conversation log, each NPC's summary, shared summaries) and
     can fail part-way (disk full, file locked). It is retried by the next end, so every record written is noted
     here and a retry writes only the missing ones: never a duplicate, and never a second summary LLM call for an
-    NPC whose summary was already generated.
+    NPC whose summary was already generated. Each record is published atomically (complete new file or the old
+    one, never a fragment), and a retry recognises a record whose publication landed although its attempt raised.
     """
     logs_written: set[str] = field(default_factory=set)
     summaries: dict[str, str] = field(default_factory=dict) # generated summary per NPC name
     summaries_written: set[str] = field(default_factory=set)
     shares_written: set[tuple[str, str, str]] = field(default_factory=set)
     pending_shares: list[tuple[str, str, str]] | None = None # captured once, by the first attempt
+    # Digest of the full file content each record's attempt tried to publish (see src/atomic_file.py). The sets
+    # above are only updated when a write returned; a write can land and still raise (os.replace, or anything
+    # after it), so a retry compares the file with this digest before writing the record again
+    publications: dict[object, str] = field(default_factory=dict)
+    # Re-summarised text of a full summary file (keyed by its path), so a rollover that failed after the LLM call
+    # is retried without a second call
+    resummaries: dict[str, str] = field(default_factory=dict)
 
 
 class Remembering(ABC):
