@@ -11,7 +11,7 @@ from src.conversation.conversation_log import conversation_log
 from src.conversation.action import Action
 from src.llm.sentence_queue import SentenceQueue
 from src.llm.sentence import Sentence
-from src.remember.remembering import Remembering
+from src.remember.remembering import FinalSaveProgress, Remembering
 from src.output_manager import ChatManager
 from src.llm.messages import AssistantMessage, SystemMessage, UserMessage
 from src.conversation.context import Context
@@ -63,6 +63,9 @@ class Conversation:
         self.__rememberer: Remembering = rememberer
         self.__llm_client = llm_client
         self.__has_already_ended: bool = False
+        self.__is_saved: bool = False # the final save completed
+        self.__final_save_progress: FinalSaveProgress = FinalSaveProgress()
+        self.__final_end_timestamp: float | None = None
         self.__is_ending: bool = False # the end sequence (goodbye) has been started
         self.__allow_mic_input: bool = True # this flag ensures mic input is disabled on conversation end
         self.__sentences: SentenceQueue = SentenceQueue()
@@ -491,18 +494,23 @@ class Conversation:
         Args:
             end_timestamp: Optional game timestamp (days passed as float) when conversation ends
 
-        Saves only once: GameStateManager's error path ends a conversation but keeps it, so the next
+        Saves exactly once: GameStateManager's error path ends a conversation but keeps it, so the next
         start or an end request ends it again; saving again would append it to every NPC's history twice
-        and summarise it twice (an LLM call). Every call still stops generation.
+        and summarise it twice (an LLM call). A save that FAILS is not "once": the exception propagates, the
+        caller keeps the conversation (GameStateManager only drops it after end() returns) and the next end
+        retries, writing only the records the failed attempt did not (FinalSaveProgress). Every call still
+        stops generation.
         """
-        already_ended = self.__has_already_ended
         self.__has_already_ended = True
         self.__stop_generation()
         self.__sentences.clear()
-        if already_ended:
+        if self.__is_saved:
             logger.debug("Conversation already ended and saved; not saving it again")
             return
-        self.__save_conversation(is_reload=False, end_timestamp=end_timestamp)
+        if self.__final_end_timestamp is None:
+            self.__final_end_timestamp = end_timestamp
+        self.__save_conversation(is_reload=False, end_timestamp=self.__final_end_timestamp, progress=self.__final_save_progress)
+        self.__is_saved = True
     
     @utils.time_it
     def __start_generating_npc_sentences(self, allow_tool_use: bool = True):
@@ -543,8 +551,11 @@ class Conversation:
                 self.__sentences.put(goodbye_sentence)        
 
     @utils.time_it
-    def __save_conversation(self, is_reload: bool, departed_npcs: list[Character] | None = None, end_timestamp: float | None = None):
-        """Saves conversation log and state for each NPC in the conversation"""
+    def __save_conversation(self, is_reload: bool, departed_npcs: list[Character] | None = None, end_timestamp: float | None = None, progress: FinalSaveProgress | None = None):
+        """Saves conversation log and state for each NPC in the conversation
+
+        progress (final save only): records already written by an earlier, failed attempt are skipped, and
+        each record is noted as soon as it is written, so a retry never duplicates one"""
         npcs = self.__context.npcs_in_conversation
 
         if departed_npcs is not None:
@@ -553,7 +564,12 @@ class Conversation:
             npcs_to_summarize = npcs.get_non_player_characters()
 
         for npc in npcs_to_summarize:
+            log_key = f"{npc.name}\x00{npc.ref_id}"
+            if progress is not None and log_key in progress.logs_written:
+                continue
             conversation_log.save_conversation_log(npc, self.__messages.transform_to_openai_messages(self.__messages.get_talk_only()), self.__context.world_id)
+            if progress is not None:
+                progress.logs_written.add(log_key)
         
         # Skip summary generation if disabled (but always allow reloads to save state)
         if not is_reload and not self.__context.config.conversation_summary_enabled:
@@ -565,7 +581,13 @@ class Conversation:
         # Get and clear pending shares (only on final save, not reload)
         pending_shares = None
         if not is_reload:
-            pending_shares = npcs.get_pending_shares()
+            if progress is not None:
+                # Captured by the first attempt: a retry must still deliver the shares that attempt cleared
+                if progress.pending_shares is None:
+                    progress.pending_shares = npcs.get_pending_shares()
+                pending_shares = progress.pending_shares
+            else:
+                pending_shares = npcs.get_pending_shares()
             npcs.clear_pending_shares()
 
         # Fall back to the latest game timestamp from context updates if no explicit timestamp was provided
@@ -573,7 +595,7 @@ class Conversation:
             end_timestamp = self.__context.game_days
 
         is_radiant = isinstance(self.__conversation_type, radiant)
-        self.__rememberer.save_conversation_state(self.__messages, npcs_to_summarize, npcs, self.__context.world_id, is_reload, pending_shares, end_timestamp, is_radiant)
+        self.__rememberer.save_conversation_state(self.__messages, npcs_to_summarize, npcs, self.__context.world_id, is_reload, pending_shares, end_timestamp, is_radiant, progress=progress)
 
     @utils.time_it
     def __initiate_reload_conversation(self):

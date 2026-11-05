@@ -1,7 +1,7 @@
 from collections import defaultdict
 import os
 import time
-from typing import Dict, List
+from typing import Callable, Dict, List
 from src.config.config_loader import ConfigLoader
 from src.config.definitions.game_definitions import GameEnum
 from src.games.gameable import Gameable
@@ -12,7 +12,7 @@ from src.llm.message_thread import message_thread
 from src.llm.messages import UserMessage, AssistantMessage
 from src.characters_manager import Characters
 from src.character_manager import Character, get_genders_text, get_races_text, get_genders_and_races_text
-from src.remember.remembering import Remembering
+from src.remember.remembering import FinalSaveProgress, Remembering
 from src import utils
 
 logger = utils.get_logger()
@@ -88,7 +88,7 @@ class Summaries(Remembering):
         return f"Below is a summary of past events:\n" + "\n\n".join(character_memories)
 
     @utils.time_it
-    def save_conversation_state(self, messages: message_thread, npcs_to_summarize: list[Character], npcs_in_conversation: Characters, world_id: str, is_reload=False, pending_shares: list[tuple[str, str, str]] | None = None, end_timestamp: float | None = None, is_radiant: bool = False):
+    def save_conversation_state(self, messages: message_thread, npcs_to_summarize: list[Character], npcs_in_conversation: Characters, world_id: str, is_reload=False, pending_shares: list[tuple[str, str, str]] | None = None, end_timestamp: float | None = None, is_radiant: bool = False, progress: FinalSaveProgress | None = None):
         """Save conversation summaries for the requested NPCs, with per-NPC thread tracking.
 
         NPCs only get summaries of the messages they actually heard (based on participation log).
@@ -103,6 +103,8 @@ class Summaries(Remembering):
             pending_shares: List of (sharer_name, recipient_name, recipient_ref_id) for memory sharing
             end_timestamp: Optional timestamp to prepend to summaries
             is_radiant: Whether this is a Radiant conversation (bypass min message threshold)
+            progress: Final-save progress (see FinalSaveProgress): already written summaries / shares are skipped,
+                cached summaries are reused instead of summarising again, and every write is recorded as it happens
         """
         npc_message_threads: Dict[str, CharacterSummaryParameters] = self.get_threads_for_summarization(messages, npcs_in_conversation)
 
@@ -122,19 +124,31 @@ class Summaries(Remembering):
         player_name = npcs_in_conversation.get_player_name() or "the player"
 
         for npc_names in npcs_with_shared_threads:
-            # Generate one summary per unique conversation experience
-            summary = self.__create_new_conversation_summary(npc_message_threads[npc_names[0]], world_id, end_timestamp, min_messages=min_messages, player_name=player_name)
+            # Generate one summary per unique conversation experience (a retried final save reuses the one it generated)
+            if progress is not None and npc_names[0] in progress.summaries:
+                summary = progress.summaries[npc_names[0]]
+            else:
+                summary = self.__create_new_conversation_summary(npc_message_threads[npc_names[0]], world_id, end_timestamp, min_messages=min_messages, player_name=player_name)
+                if progress is not None:
+                    for npc_name in npc_names:
+                        progress.summaries[npc_name] = summary
 
             # Write the same summary to all NPCs who heard the same messages
             for npc_name in npc_names:
                 npc_summaries[npc_name] = summary
+                if progress is not None and npc_name in progress.summaries_written:
+                    continue
                 if summary or is_reload:
                     character = next(c for c in npcs_to_summarize if c.name == npc_name)
-                    self.__append_new_conversation_summary(summary, character.name, character.ref_id, world_id, player_name, npc_gender=character.gender, npc_race=character.race)
+                    on_written = (lambda name=npc_name: progress.summaries_written.add(name)) if progress is not None else None
+                    self.__append_new_conversation_summary(summary, character.name, character.ref_id, world_id, player_name, npc_gender=character.gender, npc_race=character.race, on_written=on_written)
 
         # Handle pending shares: write summary with prefix to recipient folders
         if pending_shares:
             for sharer_name, recipient_name, recipient_ref_id in pending_shares:
+                share_key = (sharer_name, recipient_name, recipient_ref_id)
+                if progress is not None and share_key in progress.shares_written:
+                    continue
                 sharer_summary = npc_summaries.get(sharer_name, '')
                 if not sharer_summary:
                     continue
@@ -155,7 +169,8 @@ class Summaries(Remembering):
                 prefixed_summary = f"{sharer_name} shared with {recipient_name} a conversation with {participants_text}:\n{sharer_summary}"
 
                 # Write to recipient using name and ref_id directly
-                self.__append_new_conversation_summary(prefixed_summary, recipient_name, recipient_ref_id, world_id, player_name)
+                on_written = (lambda key=share_key: progress.shares_written.add(key)) if progress is not None else None
+                self.__append_new_conversation_summary(prefixed_summary, recipient_name, recipient_ref_id, world_id, player_name, on_written=on_written)
                 logger.info(f"Shared conversation summary with {recipient_name}")
 
     @utils.time_it
@@ -317,8 +332,11 @@ class Summaries(Remembering):
         return ""
 
     @utils.time_it
-    def __append_new_conversation_summary(self, new_summary: str, npc_name: str, npc_ref_id: str, world_id: str, player_name: str = "the player", npc_gender: str = "", npc_race: str = ""):
-        """Append a new conversation summary."""
+    def __append_new_conversation_summary(self, new_summary: str, npc_name: str, npc_ref_id: str, world_id: str, player_name: str = "the player", npc_gender: str = "", npc_race: str = "", on_written: Callable[[], None] | None = None):
+        """Append a new conversation summary.
+
+        on_written is called as soon as the summary is in the file (before any re-summarising of the whole file,
+        which can still fail), so a retried final save does not append it a second time."""
         conversation_summary_file = self.__get_latest_conversation_summary_file_path(npc_name, npc_ref_id, world_id)
         if os.path.exists(conversation_summary_file):
             with open(conversation_summary_file, 'r', encoding='utf-8') as f:
@@ -336,6 +354,8 @@ class Summaries(Remembering):
                 f.write(conversation_summaries)
         else:
             conversation_summaries = previous_conversation_summaries
+        if on_written:
+            on_written()
 
         summary_limit = int(self.__client.token_limit * self.__summary_limit_pct)
 
