@@ -22,6 +22,11 @@ class TTSServiceFailure(Exception):
 class VoiceModelNotFound(Exception):
     pass
 
+class IncompletePhraseSynthesis(Exception):
+    """A multi-phrase voiceline could not be assembled from phrase audio produced by THIS synthesis: xVASynth
+    rejected the request, or a phrase file is missing, unreadable, empty or of another sample rate. The line fails
+    (a Text-to-Speech error) instead of being merged from part of its phrases."""
+
 class xVASynth(TTSable):
     """xVASynth TTS handler
     """
@@ -50,21 +55,44 @@ class xVASynth(TTSable):
     @utils.time_it
     def _synthesize_voiceline(self, voiceline: str, final_voiceline_file: str, synth_options: SynthesizationOptions):
         phrases = self._split_voiceline(voiceline)
-        voiceline_files = []
-        for phrase in phrases:
-            voiceline_file = f"{self._voiceline_folder}/{utils.clean_text(phrase)[:150]}.wav"
-            voiceline_files.append(voiceline_file)
 
         if len(phrases) == 1:
             self._synthesize_line(phrases[0], final_voiceline_file, synth_options.aggro)
         else:
-            # TODO: include batch synthesis for v3 models (batch not needed very often)
-            if self.__model_type != 'xVAPitch':
-                self._batch_synthesize(phrases, voiceline_files)
-            else:
-                for i, voiceline_file in enumerate(voiceline_files):
-                    self._synthesize_line(phrases[i], voiceline_files[i])
-            self._merge_audio_files(voiceline_files, final_voiceline_file)
+            # Phrase files used to be named by their text and were never removed, so a phrase file of an earlier line
+            # with the same text was still there when a batch request failed, and was merged into this line's
+            # out.wav. They are now named by a token of this synthesis (they can only be this synthesis' output),
+            # every one must exist and be readable after the request, and they are removed afterwards
+            voiceline_files = self._new_phrase_file_names(len(phrases))
+            try:
+                # TODO: include batch synthesis for v3 models (batch not needed very often)
+                if self.__model_type != 'xVAPitch':
+                    self._batch_synthesize(phrases, voiceline_files)
+                else:
+                    for i, voiceline_file in enumerate(voiceline_files):
+                        self._synthesize_line(phrases[i], voiceline_files[i])
+                self._merge_audio_files(voiceline_files, final_voiceline_file)
+            finally:
+                self._remove_phrase_files(voiceline_files)
+
+    def _new_phrase_file_names(self, count: int) -> list[str]:
+        """Intermediate phrase file paths unique to one synthesis (none of them may already exist)"""
+        token = self._new_voiceline_token()
+        files = [f"{self._voiceline_folder}/phrase {token} {i:02d}.wav" for i in range(count)]
+        for phrase_file in files:
+            if os.path.lexists(phrase_file):
+                raise IncompletePhraseSynthesis(f'{phrase_file} already exists; refusing to merge a phrase of another synthesis')
+        return files
+
+    def _remove_phrase_files(self, voiceline_files: list[str]):
+        for phrase_file in voiceline_files:
+            try:
+                os.remove(phrase_file)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                # Unique to this synthesis, so a leftover can never be merged into another line; only disk space
+                logger.warning(f'Could not remove phrase file {phrase_file}: {e}')
     
 
     @utils.time_it
@@ -210,15 +238,30 @@ class xVASynth(TTSable):
 
     @utils.time_it
     def _merge_audio_files(self, audio_files, voiceline_file_name):
-        merged_audio = np.array([])
+        """Concatenate every phrase file into voiceline_file_name, which is written once and only if every phrase
+        could be read. Before, a missing or unreadable phrase was only logged and the line was written from the
+        phrases that were there (or, when the first one failed, from an older file of the same name).
 
+        Raises:
+            IncompletePhraseSynthesis: a phrase file is missing, unreadable, empty, or of another sample rate
+        """
+        pieces = []
+        merged_samplerate = None
         for audio_file in audio_files:
             try:
                 audio, samplerate = sf.read(audio_file)
-                merged_audio = np.concatenate((merged_audio, audio))
-                sf.write(voiceline_file_name, merged_audio, samplerate)
-            except:
-                logger.error(f'Could not find voiceline file: {audio_file}')
+            except Exception as e:
+                logger.error(f'Could not read voiceline phrase file: {audio_file}')
+                raise IncompletePhraseSynthesis(f'Phrase file {audio_file} is missing or unreadable ({type(e).__name__}: {e})') from e
+            if len(audio) == 0:
+                raise IncompletePhraseSynthesis(f'Phrase file {audio_file} has no audio')
+            if merged_samplerate is not None and samplerate != merged_samplerate:
+                raise IncompletePhraseSynthesis(f'Phrase file {audio_file} has sample rate {samplerate}, expected {merged_samplerate}')
+            merged_samplerate = samplerate
+            pieces.append(audio)
+        if not pieces:
+            raise IncompletePhraseSynthesis('No phrase files to merge')
+        sf.write(voiceline_file_name, np.concatenate(pieces), merged_samplerate)
 
 
     @utils.time_it
@@ -277,7 +320,11 @@ class xVASynth(TTSable):
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
-                requests.post(self.__synthesize_batch_url, json=data)
+                response = requests.post(self.__synthesize_batch_url, json=data)
+                # A rejected batch must not be merged from whatever phrase files exist
+                status_code = getattr(response, 'status_code', None)
+                if not isinstance(status_code, int) or not 200 <= status_code < 300:
+                    raise IncompletePhraseSynthesis(f'xVASynth rejected the batch request (HTTP {status_code}): {getattr(response, "text", "")}')
                 break  # Exit the loop if the request is successful
             except ConnectionError as e:
                 if attempt < max_attempts - 1:  # Not the last attempt
