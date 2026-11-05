@@ -56,9 +56,12 @@ owner on the owner's machine. Unit tests do not substitute for any step. Finding
 8. [ ] Type `goodbye`. Expected: the NPC's goodbye line, then `Conversation has ended` within a few seconds
        (R-06). MantellaSoftware: the conversation is summarised once; the NPC's conversation history file under
        `<Mantella save folder>/data/Fallout4/conversations/` gained exactly one entry (R-04).
-       **Record whether the goodbye line plays to its end or is cut off** when the conversation ends (O-10: the
-       backend answers the request after the goodbye immediately; only the installed script decides whether
-       `CleanupConversation` cuts an in-flight line).
+       **Record whether the goodbye line plays to its end or is cut off** when the conversation ends (O-10).
+       Since repair pass 2 (a5ca3eb) the backend holds the end reply that answers the line request after the
+       goodbye until the goodbye's estimated duration has elapsed (as it holds every next line); with an
+       action-aware script the end request is still answered at once. Whether the installed script's
+       `CleanupConversation` cuts an in-flight line is only observable here. Record also: no error notification,
+       and `Conversation has ended` no later than ~1 s after the goodbye finishes.
 9. [ ] Immediately start a second conversation (same or another NPC): it must start (backend still
        answering; R-01/R-02). End it with `goodbye` too.
 10. [ ] Quit to the main menu without saving, exit. Restore/discard the throwaway save.

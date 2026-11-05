@@ -3,6 +3,17 @@
 ## Safety and acceptance boundary
 **Windows-target compiled locally / NOT game-tested / NOT runtime accepted.** Frozen HTTP build: 2d82a3b; frozen Topic build: ffffcad. See the latest evidence below; historical source-only notes remain for chronology. No live Gateway access, API key, game install or vendor binaries are needed for review/unit tests. Do not start cloud jobs or paid services automatically. Do not copy build outputs to a game/MO2 tree, enable mods, launch a game, change Gateway configuration, or connect to real LLMs. Use tool-less/mock transport only. Private hosting is intentional; preserve upstream license notices.
 
+## Repair pass 2 (cloud, 2026-11-05) — branch `claude/mantella-fo4-repair-pass-2-8lah1o`
+Based on exact commit d535959 (`claude/mantella-lifecycle-audio-fixes-jikc06`); backend source/tests/docs only.
+**Read [the pass-2 report](docs/conversation-reliability/REPAIR-PASS-2-2026-11-05.md).** Fixed, each with
+production-path regressions run red on d535959 (20 failed / 7 passed there, 27 passed here; focused set 146 -> 173):
+R-04c atomic, retry-identified history/summary publication and a rollover that never publishes an empty newest
+summary (6538197); R-03c saved voiceline names bounded to 255 UTF-8 bytes with the token (f714bf3); R-03d xVASynth
+multi-phrase isolation and all-or-nothing merge (ed7c206, was O-11); O-10 end reply after a goodbye held
+asynchronously for its remaining duration (a5ca3eb; engine effect still an in-game check). The local guard-reset
+native repair and the local legacy-script adapter are not in Git and were not touched or accepted. Not done:
+Windows build, PSC/PEX verification, game run, real LLM/TTS. Repair candidate for independent review, not deployment.
+
 ## Lifecycle repair candidate (cloud, 2026-11-05) — branch `claude/mantella-lifecycle-audio-fixes-jikc06`
 Based on exact commit 32b05c6 (`claude/practical-goodall-abxw3m`); backend only, no native/Papyrus/build file touched.
 **Read [the repair report](docs/conversation-reliability/LIFECYCLE-REPAIR-2026-11-05.md).** Fixed, each with

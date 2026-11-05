@@ -53,6 +53,18 @@ Details, regressions and base/branch counts: [LIFECYCLE-REPAIR-2026-11-05.md](LI
 | O-11 | open | xVASynth multi-phrase files are never invalidated and merge errors are swallowed: a failed batch can merge an older phrase | documented, not fixed |
 | O-12 | open | a save that fails every time also fails the next start (as before R-04); history file rewritten in place (truncation on a mid-write failure) | documented |
 
+## Repair pass 2 (branch `claude/mantella-fo4-repair-pass-2-8lah1o`, from d535959)
+
+Details, baseline/branch counts and limits: [REPAIR-PASS-2-2026-11-05.md](REPAIR-PASS-2-2026-11-05.md).
+
+| ID | Sev. | Defect (at d535959) | Status |
+|---|---|---|---|
+| **R-04c** | High (lost/duplicated memory) | in-place history/summary rewrites: a write that landed then raised was duplicated by the retry; a partial write truncated earlier memory and the retry kept the fragment; a failed (or empty) rollover published an empty newest summary file that the retry never repaired | fixed 6538197: staged + fsync + os.replace publication, digest-identified retry, retryable rollover that never publishes empty |
+| **R-03c** | Medium (no audio, Linux) | R-03b's token pushed valid names over 255 UTF-8 bytes (ENAMETOOLONG -> TTS error) | fixed f714bf3: whole name component bounded, cut on a character boundary, token kept whole |
+| **R-03d** (O-11) | High (wrong audio, xVASynth) | multi-phrase: earlier synthesis' phrase files merged after a failed/partial batch; merge errors swallowed | fixed ed7c206: per-synthesis phrase names, response checked, all-or-nothing merge, cleanup |
+| O-10 | partly addressed | end reply ~1 ms after the goodbye | a5ca3eb: end reply held (async) for the goodbye's remaining duration; engine behaviour still needs the in-game check |
+| O-12 | open (narrowed) | a save that fails every time also fails the next start | unchanged; truncation on a mid-write failure no longer possible (R-04c) |
+
 ## Native lifetimes and thread requirements (reviewed, not changed)
 * F4SE_HTTP240: natives run on Papyrus VM threads and only copy strings/arrays in and out
   (`contract.h`); completions run on dispatcher threads and touch only the mutex-guarded store/queue, never
