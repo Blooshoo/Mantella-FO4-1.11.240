@@ -3,6 +3,29 @@
 ## Safety and acceptance boundary
 **Windows-target compiled locally / NOT game-tested / NOT runtime accepted.** Frozen HTTP build: 2d82a3b; frozen Topic build: ffffcad. See the latest evidence below; historical source-only notes remain for chronology. No live Gateway access, API key, game install or vendor binaries are needed for review/unit tests. Do not start cloud jobs or paid services automatically. Do not copy build outputs to a game/MO2 tree, enable mods, launch a game, change Gateway configuration, or connect to real LLMs. Use tool-less/mock transport only. Private hosting is intentional; preserve upstream license notices.
 
+## Conversation-reliability review (cloud, 2026-11-05) — branch `claude/practical-goodall-abxw3m`
+Starting commit **94163f6** (`ccr-a959bf09-5dtmxx`; `main` holds only the 17b6d33 snapshot). Owner-reported
+local evidence (both DLLs load on 1.11.240 under Proton, guards pass, Papyrus registered, GameDataReady seen)
+was taken as given, not reproduced. **Read [the architecture/state machines](docs/conversation-reliability/ARCHITECTURE.md),
+[ranked findings](docs/conversation-reliability/FINDINGS.md) and
+[the owner acceptance checklist](docs/conversation-reliability/ACCEPTANCE-CHECKLIST.md).**
+- Fixed (each commit carries its own offline regression, run red against its parent): R-01 backend wedge when a
+  generation thread ends without ending the response (d8880d8) + R-01b consumer re-check (475fb07); R-02 voiceline
+  duration from bytes present — a streamed WAV header made the next line wait ~24.8 h, unreadable audio escaped
+  `generate_sentence` (d91170c); R-03 FO4 never voices the previous line from the `MantellaVoice00` slot (cfcc5f0);
+  R-04 a conversation is saved/summarised once (0b2af2e); R-05 native error replies also carry `skse_http_error`,
+  the key the public official scripts read (4b3e56e); R-06 a delivered goodbye ends the conversation even when
+  the script ignores the end action, and radiant no longer loops goodbyes (1bff927).
+- Missing source, decisive: the installed official Papyrus scripts. The newest public ones
+  (`YetAnotherModder/fallout-4-mantella-mod` b9d7298) read actions as `string[]` while this backend sends
+  dictionaries, and have no handler for `mantella_npc_action` / `mantella_interrupted` (O-01).
+- Gates: native guard + HTTP suites exit 0 (HTTP 204 checks, dispatcher 81, ASan/UBSan/TSan, lints; real-input
+  checks SKIPPED); backend focused suite 79 passed; 41 new lifecycle tests pass; full upstream suite, network
+  isolated, identical FAILED/ERROR set before/after (147 network/asset-dependent tests). **F4SE_HTTP.dll must be
+  rebuilt** (R-05 is in the compiled core); TopicInfoPatcher is unchanged here but 94163f6 still needs its
+  Windows compile. Not done: any Windows build, game run, real LLM/TTS. Kalli's local `evaluate_loaded` guard fix
+  is not in Git and untouched here (no overlapping files).
+
 ## Latest independent Topic build and required repairs — frozen ffffcad
 
 **[Read the actual build report, findings and focused repro](docs/build-evidence/2026-11-04-topic/README.md).** Exact tested SHA **ffffcadfc27cda54f8be46454b30c78fdffc1f9c**. Both main.cpp AND Crosshair.cpp compiled with real Windows-target SDK/STL/layout assertions intact; normal resolved link produced a real TopicInfoPatcher.dll. [PE metadata/hash](docs/build-evidence/2026-11-04-topic/Topic-artifact-metadata.json), [safe argv templates](docs/build-evidence/2026-11-04-topic/build-commands.json), [execution summary](docs/build-evidence/2026-11-04-topic/execution-summary.txt). Binary not uploaded. Native/HTTP portable sanitizer gates passed; optional real inputs skipped. This supersedes historical “not compiled” notes below, not the unresolved acceptance gates.
