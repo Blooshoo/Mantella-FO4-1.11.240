@@ -1,5 +1,6 @@
 from typing import Any, Hashable
 import regex
+import time
 from src.config.definitions.llm_definitions import NarrationHandlingEnum
 from src.games.equipment import Equipment, EquipmentItem
 from src.games.external_character_info import external_character_info
@@ -47,6 +48,7 @@ class GameStateManager:
         self.__stt: Transcriber | None = None
         self.__first_line: bool = True
         self.__reply_hold_s: float = 0.0 # see pop_reply_hold_seconds
+        self.__end_ack_deadline: float = 0.0 # monotonic; concurrent duplicate ends share this deadline
         self.__automatic_greeting: bool = config.automatic_greeting
         self.__conv_has_narrator: bool = config.narration_handling == NarrationHandlingEnum.USE_NARRATOR
         self.__should_reload: bool = False
@@ -60,6 +62,7 @@ class GameStateManager:
             self.__talk.end()
             self.__talk = None
 
+        self.__end_ack_deadline = 0.0
         world_id = "default"
         if input_json.__contains__(comm_consts.KEY_STARTCONVERSATION_WORLDID):
             world_id = input_json[comm_consts.KEY_STARTCONVERSATION_WORLDID]
@@ -251,13 +254,24 @@ class GameStateManager:
         else:
             return {comm_consts.KEY_REPLYTYPE: comm_consts.KEY_REPLYTYPE_NPCTALK}
 
+    def pop_end_ack_hold_seconds(self) -> float:
+        """Remaining successful-end goodbye hold. Historical pop name retained for callers; the deadline
+        intentionally survives reads so duplicate concurrent ends cannot acknowledge early. A new conversation
+        resets it. Only the opt-in legacy route awaits it; modern explicit ends remain immediate."""
+        hold = max(0.0, self.__end_ack_deadline - time.monotonic())
+        return hold
+
     @utils.time_it
     def end_conversation(self, input_json: dict[str, Any]) -> dict[str, Any]:
         if(self.__talk):
+            self.__end_ack_deadline = 0.0
             # Extract end timestamp from game client
             end_timestamp = input_json.get(comm_consts.KEY_ENDCONVERSATION_TIMESTAMP, None)
+            # Captured before the conversation is dropped; recorded only once end() (the save) succeeded
+            goodbye_deadline = time.monotonic() + self.__talk.goodbye_hold_remaining_seconds()
             self.__talk.end(end_timestamp)
             self.__talk = None
+            self.__end_ack_deadline = goodbye_deadline
 
         logger.log(24, '\nConversations not starting when you select an NPC? See here:')
         logger.log(25, 'https://art-from-the-machine.github.io/Mantella/pages/issues_qna')

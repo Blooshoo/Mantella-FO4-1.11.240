@@ -154,7 +154,9 @@ def test_synthesize_never_reuses_a_leftover_fuz(default_config, tmp_path, monkey
     leftover = os.path.join(tts._voiceline_folder, "out.fuz")
     with open(leftover, "wb") as f:
         f.write(b"OLD LINE")  # an earlier rename failed, or the previous run was interrupted
-    wav, _ = tts.synthesize("maleboston", " Hello there. ", "MaleBoston", "MaleBoston", "en",
-                            SynthesizationOptions(False, False))
-    fuz = wav.replace(".wav", ".fuz")
-    assert not (os.path.exists(fuz) and open(fuz, "rb").read() == b"OLD LINE")
+    from src.tts.ttsable import VoicelineProvenanceError
+    # Checked platform tools now fail the line closed rather than return a WAV with no valid FUZ.
+    with pytest.raises(VoicelineProvenanceError):
+        tts.synthesize("maleboston", " Hello there. ", "MaleBoston", "MaleBoston", "en",
+                       SynthesizationOptions(False, False))
+    assert not os.path.exists(leftover)

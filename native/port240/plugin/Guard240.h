@@ -24,6 +24,11 @@ inline GuardState& state() { static GuardState s; return s; }
 template <class LogFn>
 bool evaluate_loaded(std::uintptr_t base, const std::filesystem::path& addrlib_path, LogFn&& log) {
 	auto& st = state();
+	// Revoke stale permissions before parsing, I/O, or logging can fail.
+	// Runtime identity is established by the loader, not PE/address validation.
+	const bool runtime_is_240 = st.runtime_is_240;
+	st = GuardState{};
+	st.runtime_is_240 = runtime_is_240;
 	st.evaluated = true;
 	auto* p = reinterpret_cast<const std::uint8_t*>(base);
 	std::uint32_t pe_off; std::memcpy(&pe_off, p + 0x3C, 4);

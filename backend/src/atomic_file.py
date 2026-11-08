@@ -33,7 +33,13 @@ def temp_path_for(path: str) -> str:
     """A unique sibling of path. It starts with '.', keeps the target's name (so it is recognisable) and ends in
     .tmp, so it never matches the '*.txt' scan for the latest summary file nor a '<name>.json' history path."""
     directory, name = os.path.split(path)
-    return os.path.join(directory, f".{name}.{uuid.uuid4().hex[:12]}{TEMP_SUFFIX}")
+    token = uuid.uuid4().hex[:12]
+    temp_name = f".{name}.{token}{TEMP_SUFFIX}"
+    # Keep readable names when they fit, but never lengthen a valid target
+    # beyond Linux NAME_MAX while staging an otherwise valid save.
+    if len(os.fsencode(temp_name)) > 255:
+        temp_name = f".mantella-{token}{TEMP_SUFFIX}"
+    return os.path.join(directory, temp_name)
 
 
 def write_text_atomically(path: str, text: str, open_fn: Callable = open, encoding: str = "utf-8") -> None:

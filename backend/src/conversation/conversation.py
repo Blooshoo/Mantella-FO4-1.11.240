@@ -1,6 +1,8 @@
 from enum import Enum
 from threading import Thread, Lock
 import time
+
+MAX_GOODBYE_HOLD_S = 30.0 # upper bound for holding an end acknowledgement behind a goodbye line
 from typing import Any
 from src.llm.ai_client import AIClient
 from src.llm.sentence_content import SentenceTypeEnum, SentenceContent
@@ -69,6 +71,9 @@ class Conversation:
         self.__final_end_timestamp: float | None = None
         self.__is_ending: bool = False # the end sequence (goodbye) has been started
         self.__end_reply_not_before: float = 0.0 # time.time() before which the end reply would cut the goodbye
+        # time.monotonic() deadline of the last handed-out SPOKEN line that carried the end action (the goodbye), see
+        # goodbye_hold_remaining_seconds; None until such a line is handed out
+        self.__goodbye_deadline_mono: float | None = None
         self.__allow_mic_input: bool = True # this flag ensures mic input is disabled on conversation end
         self.__sentences: SentenceQueue = SentenceQueue()
         self.__generation_thread: Thread | None = None
@@ -176,6 +181,11 @@ class Conversation:
                 time.sleep(0.01)
             self.last_sentence_audio_length = next_sentence.voice_line_duration + self.__context.config.wait_time_buffer
             self.last_sentence_start_time = time.time()
+            if {'identifier': comm_consts.ACTION_ENDCONVERSATION} in next_sentence.actions:
+                # Scripts that act on the end action (the legacy FO4 package raises it BEFORE Say, then sends an
+                # explicit end request) would clean up while this goodbye plays; remember when it has played.
+                hold = min(max(0.0, self.last_sentence_audio_length), MAX_GOODBYE_HOLD_S)
+                self.__goodbye_deadline_mono = time.monotonic() + hold
             return comm_consts.KEY_REPLYTYPE_NPCTALK, next_sentence
         else:
             # The end sequence's goodbye has been delivered and the game still asks for a line: end now. The
@@ -486,6 +496,14 @@ class Conversation:
                     goodbye_sentence.actions.append({'identifier': comm_consts.ACTION_ENDCONVERSATION})
                     self.__sentences.put(goodbye_sentence)
                     
+    def goodbye_hold_remaining_seconds(self) -> float:
+        """Remaining play time (bounded by MAX_GOODBYE_HOLD_S, monotonic clock) of the last handed-out spoken line
+        that carried the end action, or 0 if none was handed out or it has played. Read BEFORE end() drops the
+        conversation; used to hold an explicit end acknowledgement that follows such a goodbye."""
+        if self.__goodbye_deadline_mono is None:
+            return 0.0
+        return min(MAX_GOODBYE_HOLD_S, max(0.0, self.__goodbye_deadline_mono - time.monotonic()))
+
     def end_reply_hold_seconds(self) -> float:
         """How much longer the goodbye this conversation ended with is still playing (its estimated duration plus
         wait_time_buffer, the hold applied to every next line), or 0. Only set when the end reply answers the line

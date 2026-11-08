@@ -19,6 +19,7 @@ from src import utils
 from src.config.definitions.game_definitions import GameEnum
 from src.config.definitions.tts_definitions import TTSEnum
 from src.actions.function_manager import FunctionManager
+from src.http.legacy_package_protocol import LegacyPackageProtocol
 
 logger = utils.get_logger()
 
@@ -29,10 +30,12 @@ class mantella_route(routeable):
     Args:
         routeable (_type_): _description_
     """
-    def __init__(self, config: ConfigLoader, language_info: dict[Hashable, str]) -> None:
+    def __init__(self, config: ConfigLoader, language_info: dict[Hashable, str], *, package_protocol: str | None = None) -> None:
         super().__init__(config)
         self.__language_info: dict[Hashable, str] = language_info
         self.__game: GameStateManager | None = None
+        # No auto-detection or global config/environment switch: modern is unchanged.
+        self.__package_protocol = LegacyPackageProtocol(package_protocol) if package_protocol is not None else None
 
         # if not self._can_route_be_used():
         #     error_message = "MantellaSoftware settings faulty. Please check MantellaSoftware's window or log."
@@ -40,6 +43,9 @@ class mantella_route(routeable):
 
     @utils.time_it
     def _setup_route(self):
+        if self.__package_protocol:
+            self.__package_protocol.check_config(self._config)
+            self.__package_protocol.reset()
         if self.__game:
             self.__game.end_conversation({})
 
@@ -65,6 +71,8 @@ class mantella_route(routeable):
     def add_route_to_server(self, app: FastAPI):
         @app.post("/mantella")
         async def mantella(request: Request):
+            if self.__package_protocol:
+                return await self.__handle_package_request(request)
             if not self._can_route_be_used():
                 error_message = "MantellaSoftware settings faulty. Please check MantellaSoftware's window or log."
                 logger.error(error_message)
@@ -108,3 +116,44 @@ class mantella_route(routeable):
             if self._config.show_http_debug_messages:
                 logger.log(self._log_level_http_out, json.dumps(reply, indent=4))
             return reply
+
+    async def __handle_package_request(self, request: Request):
+        protocol = self.__package_protocol
+        try:
+            received_json = await request.json()
+            # Admission happens before route setup can create model/TTS/STT objects.
+            # Repeat in dispatch after config reload; preflight never invokes a game.
+            protocol.prepare_request(received_json, self._config)
+            request_type = received_json[comm_consts.KEY_REQUESTTYPE]
+            if request_type == comm_consts.KEY_REQUESTTYPE_ENDCONVERSATION and self.__game is not None:
+                # Do not reload/recreate the manager or lose the explicit end timestamp.
+                reply = protocol.dispatch(received_json, self._config, self.__game)
+            else:
+                if not self._can_route_be_used():
+                    raise ValueError("MantellaSoftware settings faulty")
+                if self.__game is None:
+                    raise ValueError("Game manager setup failed")
+                reply = protocol.dispatch(received_json, self._config, self.__game)
+            await self.__hold_package_end_ack(request_type, reply)
+            return reply
+        except Exception as error:
+            return protocol.failure(error, self.__game)
+
+    async def __hold_package_end_ack(self, request_type: str, reply: dict) -> None:
+        """O-10 for the legacy package. The continue hold is consumed; the explicit-end deadline survives reads
+        to cover concurrent duplicates. The async wait applies only to a successful end acknowledgement:
+        * continue -> end: the action-blind line request after a goodbye (pop_reply_hold_seconds);
+        * explicit end: the package raises the goodbye's end action BEFORE Say and sends its end request at once,
+          so its acknowledgement waits for the goodbye captured before the conversation was dropped
+          (pop_end_ack_hold_seconds). Errors/refusals and ordinary ends without a pending goodbye are not held."""
+        reply_hold = self.__game.pop_reply_hold_seconds() if request_type == comm_consts.KEY_REQUESTTYPE_CONTINUECONVERSATION else 0.0
+        end_hold = self.__game.pop_end_ack_hold_seconds()
+        if request_type == comm_consts.KEY_REQUESTTYPE_ENDCONVERSATION:
+            hold_s = end_hold
+        elif request_type == comm_consts.KEY_REQUESTTYPE_CONTINUECONVERSATION:
+            hold_s = reply_hold
+        else:
+            hold_s = 0.0
+        if hold_s > 0 and isinstance(reply, dict) and reply.get(comm_consts.KEY_REPLYTYPE) == comm_consts.KEY_REPLYTYPE_ENDCONVERSATION:
+            logger.debug(f'Holding the package end acknowledgement {round(hold_s, 1)} seconds for the goodbye to play')
+            await asyncio.sleep(hold_s)

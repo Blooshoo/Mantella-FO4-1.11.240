@@ -6,6 +6,8 @@
 #include "Guard240.h"
 
 #include <cstdio>
+#include <array>
+#include <cstring>
 #include <optional>
 #include <string_view>
 
@@ -94,6 +96,23 @@ int main() {
 		CHECK(plugin::allowed(n));
 	for (std::string_view n : { "ClearCache", "SetOverrideFileName", "TakeScreenShot", "GetLastActorCoords" })
 		CHECK(!plugin::allowed(n));  // still disabled: Unresolved / LocatedAbiUnproven dependencies
+
+	// Actual evaluator re-entry revokes the old report and callback pointer.
+	for (bool runtime : {true, false}) {
+		set_state(true, true, true, as_catalog);
+		FakeSettings* saved = dispatch(); CHECK(saved == &g_fake);
+		state().runtime_is_240 = runtime;
+		std::array<std::uint8_t, 1024> invalid{};
+		std::uint32_t peoff = 64, size = invalid.size();
+		std::memcpy(invalid.data() + 0x3c, &peoff, 4);
+		std::memcpy(invalid.data() + peoff + 24 + 56, &size, 4);
+		CHECK(!plugin::evaluate_loaded(reinterpret_cast<std::uintptr_t>(invalid.data()),
+			"/nonexistent-guard-reset-fixture", [](const std::string&) {}));
+		CHECK(state().evaluated); CHECK(state().runtime_is_240 == runtime);
+		CHECK(!state().core_ok); CHECK(state().report.offsets.empty()); CHECK(state().report.natives.empty());
+		g_calls = 0; saved = dispatch(); CHECK(saved == nullptr); CHECK(g_calls == 0);
+		expect_refused("actual failed revalidation", true);
+	}
 
 	// 8. state reset after a validated dispatch: the next dispatch is refused and yields nullptr, so the
 	//    value MessageHandler stores cannot keep a stale pointer usable
