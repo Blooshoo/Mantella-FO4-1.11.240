@@ -1,0 +1,119 @@
+[
+  {
+    "path": "backend/main_legacy_package.py",
+    "sha256": "e5a54e325f0ac8d6a02a8c561576c04087dd50ff67367786cde1f6beb0b085cd",
+    "prior_sha256": null,
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/tests/test_windows_voice_tools.py",
+    "sha256": "f33d4a2868f76308c56aa7dc996a0500e4a665aea4e08c5b4ab8b9ad8471e21e",
+    "prior_sha256": null,
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/tests/test_paired_candidate_interactions.py",
+    "sha256": "62079ed1a429bcd1d9dcd4d36487f31bcde4460ed200de3521b7acc9792bff33",
+    "prior_sha256": null,
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/tests/test_legacy_package_protocol.py",
+    "sha256": "fc57bb7e7406425c423526530a024f6273b6831cb518a5fdb5ebf75603e72c78",
+    "prior_sha256": null,
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/tests/test_lifecycle_fo4_voiceline.py",
+    "sha256": "469c09fad4e0c8ef2205ba02a9797e407ecc9a0cc35b250ecc79ffb2d4e17313",
+    "prior_sha256": "0d4f2902a15dca447f1f307ea0872d548beb36d0d12b24f27af29572e2c793a8",
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/tests/test_package_explicit_end_hold.py",
+    "sha256": "538316e0c9ba6477f6bcbb1064cb4b749c071235ad82c9055ed54f6445c6e41d",
+    "prior_sha256": null,
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/tests/test_astra_package_sequence.py",
+    "sha256": "5340b1dc1fbf689ec3762b594cfe14b14fca6d618584473e65d7bdf56c8cbf6b",
+    "prior_sha256": null,
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/tests/test_atomic_name_boundary.py",
+    "sha256": "332d252c6a1936eb5756ffc4458071957bd2db8e6af168d665073f3dd2474187",
+    "prior_sha256": null,
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/src/game_manager.py",
+    "sha256": "ea33f15f316ae2cb0df3260aa8c318aaa082f45b4338af43c1f54a9aac5b53e9",
+    "prior_sha256": "3c4d369ea967f3ab7970b3e4656e32a3b173a7eea690579974cc5a1503f273e9",
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/src/atomic_file.py",
+    "sha256": "0302baa76dbda109db461524b2d86e7652027417ee265cbe4e603404a94f8787",
+    "prior_sha256": "967255389629ee2a14aa12b2044ac4952e2d61d484b32e1896fffce5a708aefb",
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/src/http/legacy_package_protocol.py",
+    "sha256": "5d70e5b921bcb0cc4d3e8d94835c7a619210fc1d5e8878b3174bfe39ca0becb4",
+    "prior_sha256": null,
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/src/conversation/conversation.py",
+    "sha256": "7039fdf0fd5b3a1f28e819076faaeca7e74a0dcd977215be89ab5a3e82a0c13d",
+    "prior_sha256": "f983de89a7eb14c10366fab5189b034806323c39730264336f7e600f7e47bf03",
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/src/tts/windows_voice_tools.py",
+    "sha256": "2d9dd6ba6e213cc37eca00ecdc610f21e09f30317ee0dedc3c400d6e6a77daeb",
+    "prior_sha256": null,
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/src/tts/ttsable.py",
+    "sha256": "e1c8b02f49957d02ac8e06186d273e57de19055c01124e4b1cc8b5dab313fa2e",
+    "prior_sha256": "ed5a8189e848e87387124a25abd337fa6839b8a738335e6658b0046f96fd36f9",
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/src/http/routes/mantella_route.py",
+    "sha256": "31bcc37efaadf1507ab5000fa5bcb95d755dccf3442fcfecc72902ec0dd46fc4",
+    "prior_sha256": "ea8dd3bb1f63ce6c8a9d51a2853c102b4f88af8c4e50ab7d298d6ce0fa1ee23d",
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "native/port240/tests/test_plugin_gates.cpp",
+    "sha256": "2636ba96fbaab3a9bb3b831a8b222a334214e4ebaaa289c14464ecff267085e6",
+    "prior_sha256": "bde94444d00d3e3db0e90c6bea0e0f50834c8a770df3b5e7278a202e1aa86dce",
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "native/port240/plugin/Guard240.h",
+    "sha256": "673c40692fdc0b1eb7240793cd9e40f78302384841eab6d565807c8938c2e85e",
+    "prior_sha256": "7282583fa0d619c78a61bdff36adaa6d2215157fd0f4b0dce3438ff60b788c8c",
+    "origin": "isolated Nov5 repair candidate; base hosted repair pass 2 plus reviewed parent repairs"
+  },
+  {
+    "path": "backend/src/llm/remote_adapter.py",
+    "sha256": "e4d1a5a373302001323e5edaf7c4cd44c1a68298c0a41289b2ff7460592d3794",
+    "origin": "derived opt-in Nov8 remote text adapter; sanitized environment-only credential resolution and synthetic offline tests"
+  },
+  {
+    "path": "backend/tests/test_remote_adapter.py",
+    "sha256": "34600b2e542e177e2e0c57bee9d0ba4f726c2b7250c0db28463edb88965f86aa",
+    "origin": "derived opt-in Nov8 remote text adapter; sanitized environment-only credential resolution and synthetic offline tests"
+  },
+  {
+    "path": "backend/main_remote.py",
+    "sha256": "c9686b52b4c504905f31603b5e655027a8b571535a6b0964eedacb820e21b2b6",
+    "origin": "derived opt-in Nov8 remote text adapter; sanitized environment-only credential resolution and synthetic offline tests"
+  }
+]

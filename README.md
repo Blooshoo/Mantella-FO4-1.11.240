@@ -1,14 +1,12 @@
-# Mantella FO4 1.11.240 — private development snapshot
+# Mantella FO4 1.11.240 — experimental source
 
-Source-only development aggregate for Fallout 4 runtime **1.11.240 / F4SE 0.7.9**, including the Mantella backend/OpenClaw adapter and native port sources. This is an independent modified snapshot, not an official Mantella release or a GitHub network fork.
+Independent modified source-only aggregate for **Fallout 4 1.11.240.0 / F4SE 0.7.9**. Not an official Mantella release, packaged mod or certified rebuild of an installed DLL.
 
-**NOT Windows-compiled. NOT game-tested. Do not deploy these sources as a working mod.**
+Start with [EXPERIMENTAL.md](EXPERIMENTAL.md) for current scope, typed-input/Piper requirements, opt-in environment-only remote routing and portable test commands. [PROVENANCE.md](PROVENANCE.md) preserves component origins/licenses. [CLOUD-HANDOFF.md](CLOUD-HANDOFF.md) and its linked reports retain chronological repair/build evidence, not current runtime acceptance.
 
-Start with [CLOUD-HANDOFF.md](CLOUD-HANDOFF.md), [REVIEW-STATUS.md](REVIEW-STATUS.md), and [PROVENANCE.md](PROVENANCE.md).
+- Backend: AGPL-3.0, original license retained.
+- TopicInfoPatcher/native guard modifications: GPL-3.0, original license retained.
+- F4SE_HTTP component: MIT, original author notice retained.
+- No game/model/toolchain binaries, personal configuration, credentials or live runtime artifacts.
 
-- Backend source/tests/text action data: backend/ (AGPL-3.0; original license retained).
-- Native guards, TopicInfoPatcher modifications and F4SE_HTTP240: native/ (component licenses retained; see provenance).
-- No previous Git history, live config, credentials, game assets, SDK, CRT, compiled plugins, models or toolchains.
-- Upstream presentation is retained as backend/UPSTREAM-README.md; its asset/download claims are not claims about this stripped development snapshot.
-
-Private visibility controls hosting access; it does not replace or restrict upstream license rights.
+Owner-observed typed dialogue/speech in a local checkpoint is not a test of this exact Git source-to-binary pairing. No broad gameplay, restart persistence, Linux microphone or production voice-selection claim is made. Review and build independently before deployment.

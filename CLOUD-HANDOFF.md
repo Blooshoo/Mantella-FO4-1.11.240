@@ -1,7 +1,16 @@
+## Next bounded tasks (current candidate)
+1. Independently review the exact source commit, licenses, privacy scan coverage and unresolved claims in EXPERIMENTAL.md; keep remote publication separate from deployment.
+2. Reproduce the focused portable commands from EXPERIMENTAL.md without providers, game inputs or model downloads. Pin a fresh dependency environment before claiming clean-room reproducibility.
+3. Separately authorized Windows build only: fetch the pinned libxse revision and its locked submodules, apply the existing bounded patch, preserve layout/guard tripwires, keep COPY_BUILD=OFF and deployment variables unset. Record compiler/toolchain versions and source revisions, not game binaries.
+4. Establish source/binary association and legally obtained text-input/voice prerequisites before separately authorized runtime acceptance. Never infer in-game safety from portable fake-engine tests.
+5. Runtime acceptance must explicitly test disposable typed dialogue, voice delivery and goodbye timing, then backend/game restart persistence and wider actions if desired; those are not certified here.
+
+> Current source-only integration (2026-11-08): read [EXPERIMENTAL.md](EXPERIMENTAL.md) first. The residual atomic-name, opt-in legacy protocol, explicit-END hold, checked voice-tool and guard-reset repairs are now included. Historical sections below describe their pinned revisions; statements that a local repair is absent apply only to those historical revisions. Portable gates are rerun on the publication candidate. Exact installed-DLL pairing remains unestablished. No deployment/game/provider calls are authorized by this document.
+
 # Claude Cloud handoff
 
 ## Safety and acceptance boundary
-**Windows-target compiled locally / NOT game-tested / NOT runtime accepted.** Frozen HTTP build: 2d82a3b; frozen Topic build: ffffcad. See the latest evidence below; historical source-only notes remain for chronology. No live Gateway access, API key, game install or vendor binaries are needed for review/unit tests. Do not start cloud jobs or paid services automatically. Do not copy build outputs to a game/MO2 tree, enable mods, launch a game, change Gateway configuration, or connect to real LLMs. Use tool-less/mock transport only. Private hosting is intentional; preserve upstream license notices.
+**Windows-target compiled locally / NOT game-tested / NOT runtime accepted.** Frozen HTTP build: 2d82a3b; frozen Topic build: ffffcad. See the latest evidence below; historical source-only notes remain for chronology. No live Gateway access, API key, game install or vendor binaries are needed for review/unit tests. Do not start cloud jobs or paid services automatically. Do not copy build outputs to a game/MO2 tree, enable mods, launch a game, change Gateway configuration, or connect to real LLMs. Use tool-less/mock transport only. Visibility is an owner decision; preserve upstream license notices.
 
 ## Repair pass 2 (cloud, 2026-11-05) — branch `claude/mantella-fo4-repair-pass-2-8lah1o`
 Based on exact commit d535959 (`claude/mantella-lifecycle-audio-fixes-jikc06`); backend source/tests/docs only.
